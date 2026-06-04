@@ -1,0 +1,112 @@
+# ubproject.toml — single source of truth shared by `ubc` (lint / needs build)
+# and the Sphinx build (consumed via `needs_from_toml = "../ubproject.toml"` in
+# spec/conf.py). Sphinx-level configuration (extensions, theme) lives in
+# spec/conf.py; need types, link types, and the patdhlk-skills agent
+# configuration live here.
+"$schema" = "https://ubcode.useblocks.com/ubproject.schema.json"
+
+[project]
+name = "patdhlk-skills"
+description = "Agent skills with sphinx-needs-backed issues, requirements, and ADRs"
+srcdir = "spec"
+
+[needs]
+# Sphinx-Needs options, with the `needs_` prefix dropped.
+id_required = true
+
+# Extra fields. `kind` classifies issues; `github` carries the GitHub issue
+# number on needs when a repo uses the github issue backend (ADR_0009).
+[needs.fields.kind]
+description = "Issue kind: bug | feature | improvement | chore | question"
+nullable = true
+schema = { type = "string", enum = ["bug", "feature", "improvement", "chore", "question"] }
+
+[needs.fields.github]
+description = "GitHub issue number this need is tracked by (github backend only)"
+nullable = true
+schema = { type = "string" }
+
+# Need types — the lean role set the patdhlk-skills workflows read and write.
+# Consumer repos keep their own catalogs; skills resolve directives through
+# [tool.patdhlk-skills.roles] below (ADR_0004).
+
+[[needs.types]]
+directive = "issue"
+title = "Issue"
+prefix = "ISSUE_"
+color = "#E8C8A0"
+style = "node"
+
+[[needs.types]]
+directive = "feat"
+title = "Feature"
+prefix = "FEAT_"
+color = "#BFD8D2"
+style = "node"
+
+[[needs.types]]
+directive = "req"
+title = "Requirement"
+prefix = "REQ_"
+color = "#BFD8D2"
+style = "node"
+
+[[needs.types]]
+directive = "arch-decision"
+title = "Architecture Decision"
+prefix = "ADR_"
+color = "#A6C8E0"
+style = "node"
+
+[[needs.types]]
+directive = "term"
+title = "Glossary Term"
+prefix = "GLOSS_"
+color = "#D8D8D8"
+style = "node"
+
+[[needs.types]]
+directive = "test"
+title = "Test Case"
+prefix = "TEST_"
+color = "#DCB239"
+style = "node"
+
+# Extra link types — traceability relations beyond the built-in `:links:`.
+
+[needs.links.satisfies]
+incoming = "is satisfied by"
+outgoing = "satisfies"
+
+[needs.links.refines]
+incoming = "is refined by"
+outgoing = "refines"
+
+[needs.links.implements]
+incoming = "is implemented by"
+outgoing = "implements"
+
+[needs.links.verifies]
+incoming = "is verified by"
+outgoing = "verifies"
+
+# ------------------------------------------------------------------------
+# patdhlk-skills agent configuration (read by the skills at runtime).
+# This repo dogfoods the local sphinx-needs backend (ADR_0012).
+# ------------------------------------------------------------------------
+
+[tool.patdhlk-skills]
+issue_backend = "sphinx-needs" # or "github"
+spec_dir = "spec"
+builder = "ubc"                # or "sphinx-build"
+issue_doc = "spec/issues/index.rst"
+
+# Role map: abstract skill roles -> this repo's directive names (ADR_0004).
+# Skills only ever look up roles; they never assume directive names.
+[tool.patdhlk-skills.roles]
+issue = "issue"
+feature = "feat"
+requirement = "req"
+decision = "arch-decision"
+term = "term"
+test = "test"

@@ -1,0 +1,46 @@
+// Dev container for patdhlk-skills (ADR_0012), based on the
+// sphinx-needs-starter image: Python 3.12 + uv + graphviz/plantuml/Java.
+// Fetches the ubc CLI on create, then runs `uv sync` to materialize the
+// .venv from pyproject.toml / uv.lock.
+{
+    "name": "patdhlk-skills",
+    "image": "ghcr.io/patdhlk/sphinx-needs-starter:latest",
+
+    // ubc is useblocks' proprietary binary and is not redistributed in the
+    // image; fetch it on create (needs root, hence sudo).
+    "onCreateCommand": "sudo bash .devcontainer/install-ubc.sh",
+
+    // Create the local .venv with the documentation toolchain.
+    "postCreateCommand": "uv sync",
+
+    "remoteUser": "vscode",
+
+    // sphinx-autobuild serves a live HTML preview on port 8000.
+    "forwardPorts": [8000],
+    "portsAttributes": {
+        "8000": {
+            "label": "Sphinx live preview"
+        }
+    },
+
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "useblocks.ubcode",
+                "ms-python.python",
+                "swyddfa.esbonio",
+                "tamasfe.even-better-toml",
+                "trond-snekvik.simple-rst"
+            ],
+            "settings": {
+                // Point VS Code (and esbonio) at the uv-managed virtualenv.
+                "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+
+                // esbonio language server: use the project's Python and tell it
+                // where the Sphinx conf.py lives (spec/).
+                "esbonio.sphinx.pythonCommand": ["${workspaceFolder}/.venv/bin/python"],
+                "esbonio.sphinx.confDir": "${workspaceFolder}/spec"
+            }
+        }
+    }
+}

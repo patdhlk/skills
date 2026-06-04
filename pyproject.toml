@@ -1,0 +1,26 @@
+# NON-package documentation/toolchain environment for the patdhlk-skills repo.
+# There is nothing to build or install from this project itself; it pins the
+# Sphinx + sphinx-needs toolchain used to build the spec under spec/.
+#
+# Set up with:
+#
+#     uv sync
+#
+# which creates a local .venv. The spec sources live in spec/ and build to
+# spec/_build/<builder>.
+
+[project]
+name = "patdhlk-skills"
+version = "0.1.0"
+description = "Agent skills with sphinx-needs-backed issues, requirements, and ADRs."
+requires-python = ">=3.12"
+dependencies = [
+    "sphinx>=7,<9",
+    "sphinx-needs>=8,<9",
+    "furo",
+    "sphinx-autobuild",
+]
+
+[tool.uv]
+# Non-package project: do not attempt to build/install this directory itself.
+package = false

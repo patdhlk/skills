@@ -1,0 +1,11 @@
+{
+    "name": "patdhlk-skills",
+    "description": "Agent workflow skills with sphinx-needs-backed issues, requirements, and ADRs. Drop-in replacement for mattpocock/skills — do not install both.",
+    "version": "0.1.0",
+    "author": {
+        "name": "Patrick Dahlke",
+        "email": "me@patrickdahlke.com"
+    },
+    "homepage": "https://github.com/patdhlk/skills",
+    "license": "MIT"
+}

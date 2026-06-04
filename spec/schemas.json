@@ -1,0 +1,74 @@
+{
+  "$comment": "Schema validation for the patdhlk-skills spec. Loaded by spec/conf.py; see the sphinx-needs schema docs at https://sphinx-needs.readthedocs.io/en/latest/schema/index.html for the rule grammar. Groups: (1) ID format per type, (2) issue status state machine (ADR_0005). Violations fail the strict `sphinx-build -W` gate (ADR_0007).",
+
+  "$defs": {
+    "type-issue":         { "properties": { "type": { "const": "issue" } } },
+    "type-feat":          { "properties": { "type": { "const": "feat" } } },
+    "type-req":           { "properties": { "type": { "const": "req" } } },
+    "type-arch-decision": { "properties": { "type": { "const": "arch-decision" } } },
+    "type-term":          { "properties": { "type": { "const": "term" } } },
+    "type-test":          { "properties": { "type": { "const": "test" } } }
+  },
+
+  "schemas": [
+    {
+      "id": "id-issue",
+      "message": "issue ID must match ^ISSUE_\\d{4}$",
+      "select": { "$ref": "#/$defs/type-issue" },
+      "validate": { "local": { "properties": { "id": { "pattern": "^ISSUE_\\d{4}$" } }, "required": ["id"] } }
+    },
+    {
+      "id": "id-feat",
+      "message": "feat ID must match ^FEAT_\\d{4}$",
+      "select": { "$ref": "#/$defs/type-feat" },
+      "validate": { "local": { "properties": { "id": { "pattern": "^FEAT_\\d{4}$" } }, "required": ["id"] } }
+    },
+    {
+      "id": "id-req",
+      "message": "req ID must match ^REQ_\\d{4}$",
+      "select": { "$ref": "#/$defs/type-req" },
+      "validate": { "local": { "properties": { "id": { "pattern": "^REQ_\\d{4}$" } }, "required": ["id"] } }
+    },
+    {
+      "id": "id-arch-decision",
+      "message": "arch-decision ID must match ^ADR_\\d{4}$",
+      "select": { "$ref": "#/$defs/type-arch-decision" },
+      "validate": { "local": { "properties": { "id": { "pattern": "^ADR_\\d{4}$" } }, "required": ["id"] } }
+    },
+    {
+      "id": "id-term",
+      "message": "term (glossary) ID must match ^GLOSS_\\d{4}$",
+      "select": { "$ref": "#/$defs/type-term" },
+      "validate": { "local": { "properties": { "id": { "pattern": "^GLOSS_\\d{4}$" } }, "required": ["id"] } }
+    },
+    {
+      "id": "id-test",
+      "message": "test ID must match ^TEST_\\d{4}$",
+      "select": { "$ref": "#/$defs/type-test" },
+      "validate": { "local": { "properties": { "id": { "pattern": "^TEST_\\d{4}$" } }, "required": ["id"] } }
+    },
+    {
+      "id": "issue-status",
+      "message": "issue :status: must be one of the triage states: needs-triage | needs-info | ready-for-agent | ready-for-human | in-progress | done | wontfix (ADR_0005)",
+      "select": { "$ref": "#/$defs/type-issue" },
+      "validate": {
+        "local": {
+          "properties": {
+            "status": {
+              "enum": [
+                "needs-triage",
+                "needs-info",
+                "ready-for-agent",
+                "ready-for-human",
+                "in-progress",
+                "done",
+                "wontfix"
+              ]
+            }
+          },
+          "required": ["status"]
+        }
+      }
+    }
+  ]
+}

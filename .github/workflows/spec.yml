@@ -1,0 +1,26 @@
+# Strict spec build gate (ADR_0007): schema violations, broken links, and
+# duplicate IDs fail the build. Runs on every push and PR.
+name: spec
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  strict-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync toolchain
+        run: uv sync
+
+      - name: Strict build (warnings are errors)
+        run: uv run sphinx-build -W -b html spec spec/_build/html
+
+      - name: Build needs.json
+        run: uv run sphinx-build -b needs spec spec/_build/needs

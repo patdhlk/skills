@@ -1,0 +1,6 @@
+# Python / uv
+.venv/
+__pycache__/
+
+# Sphinx build output
+spec/_build/

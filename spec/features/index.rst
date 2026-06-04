@@ -6,7 +6,7 @@ implements one of these features.
 
 .. feat:: Issue-flow core
    :id: FEAT_0001
-   :status: open
+   :status: implemented
 
    The skills that read and write the issue store through the configurable
    backend (:need:`ADR_0003`): ``/to-prd``, ``/to-issues``, ``/triage``,

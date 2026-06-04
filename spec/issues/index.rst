@@ -68,7 +68,7 @@ The dogfooded backlog (:need:`ADR_0012`): every v1 skill port is an
 
 .. issue:: Port /grill-me
    :id: ISSUE_0006
-   :status: ready-for-agent
+   :status: done
    :kind: feature
    :implements: FEAT_0002
 

@@ -11,6 +11,7 @@ manifest and `npx skills add patdhlk/skills` (ADR_0013).
 | [`to-issues`](to-issues/SKILL.md) | ISSUE_0003 |
 | [`triage`](triage/SKILL.md) | ISSUE_0004 |
 | [`qa`](qa/SKILL.md) | ISSUE_0005 |
+| [`grill-me`](grill-me/SKILL.md) | ISSUE_0006 |
 
 The remaining v1 backlog is tracked as `.. issue::` directives in
 [`../spec/issues/index.rst`](../spec/issues/index.rst).

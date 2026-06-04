@@ -15,7 +15,7 @@ implements one of these features.
 
 .. feat:: Docs and decision flow
    :id: FEAT_0002
-   :status: open
+   :status: implemented
 
    The skills that write durable artifacts — ``arch-decision``, ``req``, and
    ``term`` directives — into a consumer repo's sphinx-needs spec instead of

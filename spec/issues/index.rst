@@ -7,7 +7,7 @@ The dogfooded backlog (:need:`ADR_0012`): every v1 skill port is an
 
 .. issue:: Implement /setup-patdhlk-skills
    :id: ISSUE_0001
-   :status: ready-for-agent
+   :status: done
    :kind: feature
    :implements: FEAT_0004
 

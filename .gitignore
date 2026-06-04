@@ -4,3 +4,6 @@ __pycache__/
 
 # Sphinx build output
 spec/_build/
+
+# Claude Code harness artifacts
+.claude/scheduled_tasks.lock

@@ -24,7 +24,7 @@ implements one of these features.
 
 .. feat:: Dev-loop skills
    :id: FEAT_0003
-   :status: open
+   :status: implemented
 
    Largely backend-agnostic engineering workflow skills: ``/tdd``,
    ``/diagnose``, ``/review``, ``/prototype``. They reference the issue store
@@ -32,7 +32,7 @@ implements one of these features.
 
 .. feat:: Setup and scaffolding
    :id: FEAT_0004
-   :status: open
+   :status: implemented
 
    ``/setup-patdhlk-skills`` configures a consumer repo: reads an existing
    ``ubproject.toml`` and adapts to it (never imposes a catalog), persists

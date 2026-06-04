@@ -103,6 +103,7 @@ spec_dir = "<spec>"
 builder = "ubc"                  # or "sphinx-build"
 issue_doc = "<spec>/issues/index.rst"   # sphinx-needs backend only
 # features_dir = "<spec>/features"      # written by /to-prd on first use
+# decisions_doc = "<spec>/architecture/index.rst"  # written by /decide on first use
 
 [tool.patdhlk-skills.roles]
 # only roles that resolved to a directive — never invent entries

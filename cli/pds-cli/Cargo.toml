@@ -9,6 +9,7 @@ keywords.workspace = true
 description = "Gate-and-query CLI for sphinx-needs-backed repos — JSON-only stdout, exit 0/1/2 contract"
 categories = ["command-line-utilities", "development-tools"]
 readme = "../README.md"
+exclude = ["tests/version_lockstep.rs"]
 
 [[bin]]
 name = "pds"

@@ -31,12 +31,12 @@ cargo install pds-cli
 
 The installed binary is named `pds`.
 
-### From GitHub Releases
+### From GitHub Releases (first release pending)
 
-Pre-built binaries for Linux x86_64, macOS x86_64, and macOS aarch64 are
-attached to each [GitHub Release](https://github.com/patdhlk/skills/releases).
-A one-line installer will be added in a forthcoming release — check the release
-notes for the `install.sh` link.
+Pre-built binaries for Linux x86_64, macOS x86_64, and macOS aarch64 will be
+attached to each [GitHub Release](https://github.com/patdhlk/skills/releases)
+once the first release is published. A one-line installer will be added at that
+point — check the release notes for the `install.sh` link.
 
 ## Usage
 

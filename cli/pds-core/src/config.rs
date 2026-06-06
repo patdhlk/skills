@@ -4,8 +4,8 @@
 //! and validates all values. Unknown keys in `[tool.patdhlk-skills]` are
 //! silently ignored so future keys don't break old binaries.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::collections::{HashMap, HashSet};
+use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -75,23 +75,32 @@ impl Config {
     }
 
     fn from_raw(doc: RawDoc, root: &Path) -> Result<Config, Error> {
-        let tool = doc.tool.and_then(|t| t.patdhlk_skills);
         let raw_srcdir = doc.project.and_then(|p| p.srcdir);
-        let declared_directives: Vec<String> = doc
+
+        // Build an O(1) lookup set from [[needs.types]] before consuming `doc.needs`.
+        let declared_directives: HashSet<String> = doc
             .needs
             .map(|n| n.types.into_iter().map(|t| t.directive).collect())
             .unwrap_or_default();
 
+        // Destructure the tool table once so all fields can be moved/borrowed freely.
+        let RawPatdhlkSkills {
+            spec_dir: raw_spec_dir,
+            builder: raw_builder,
+            issue_backend: raw_issue_backend,
+            issue_doc: raw_issue_doc,
+            roles: raw_roles,
+            gate: raw_gate,
+        } = doc.tool.and_then(|t| t.patdhlk_skills).unwrap_or_default();
+
         // spec_dir: tool > project.srcdir > "spec"
-        let spec_dir_rel = tool
-            .as_ref()
-            .and_then(|t| t.spec_dir.clone())
+        let spec_dir_rel = raw_spec_dir
             .or(raw_srcdir)
             .unwrap_or_else(|| "spec".to_string());
-        let spec_dir = absolutize_path(root, &spec_dir_rel);
+        let spec_dir = resolve_against_root(root, &spec_dir_rel);
 
         // builder
-        let builder = match tool.as_ref().and_then(|t| t.builder.as_deref()) {
+        let builder = match raw_builder.as_deref() {
             None | Some("sphinx-build") => Builder::SphinxBuild,
             Some("ubc") => Builder::Ubc,
             Some(other) => {
@@ -104,7 +113,7 @@ impl Config {
         };
 
         // issue_backend
-        let issue_backend = match tool.as_ref().and_then(|t| t.issue_backend.as_deref()) {
+        let issue_backend = match raw_issue_backend.as_deref() {
             None | Some("sphinx-needs") => IssueBackend::SphinxNeeds,
             Some("github") => IssueBackend::Github,
             Some(other) => {
@@ -117,22 +126,19 @@ impl Config {
         };
 
         // issue_doc
-        let issue_doc = tool
-            .as_ref()
-            .and_then(|t| t.issue_doc.as_deref())
-            .map(|p| absolutize_path(root, p));
+        let issue_doc = raw_issue_doc
+            .as_deref()
+            .map(|p| resolve_against_root(root, p));
 
-        // roles
-        let roles: HashMap<String, String> = tool
-            .as_ref()
-            .and_then(|t| t.roles.clone())
-            .unwrap_or_default();
+        // roles — move out of the Option directly (no extra clone per field)
+        let roles: HashMap<String, String> = raw_roles.unwrap_or_default();
 
         // Fail-on-drift: every directive value in roles must appear in [[needs.types]]
+        // O(roles) thanks to the HashSet built above.
         if !roles.is_empty() {
             let mut drift: Vec<(String, String)> = roles
                 .iter()
-                .filter(|(_, directive)| !declared_directives.contains(directive))
+                .filter(|(_, directive)| !declared_directives.contains(*directive))
                 .map(|(role, directive)| (role.clone(), directive.clone()))
                 .collect();
             if !drift.is_empty() {
@@ -151,20 +157,20 @@ impl Config {
             }
         }
 
+        // Destructure gate once so both fields can be moved independently.
+        let (gate_needs_json, gate_sphinx_command) = match raw_gate {
+            Some(g) => (g.needs_json, g.sphinx_command),
+            None => (None, None),
+        };
+
         // gate.needs_json: from table or default <spec_dir>/_build/needs/needs.json
-        let needs_json = tool
-            .as_ref()
-            .and_then(|t| t.gate.as_ref())
-            .and_then(|g| g.needs_json.as_deref())
-            .map(|p| absolutize_path(root, p))
+        let needs_json = gate_needs_json
+            .as_deref()
+            .map(|p| resolve_against_root(root, p))
             .unwrap_or_else(|| spec_dir.join("_build/needs/needs.json"));
 
         // gate.sphinx_command: from table or default
-        let sphinx_command = match tool
-            .as_ref()
-            .and_then(|t| t.gate.as_ref())
-            .and_then(|g| g.sphinx_command.clone())
-        {
+        let sphinx_command = match gate_sphinx_command {
             None => vec![
                 "uv".to_string(),
                 "run".to_string(),
@@ -175,7 +181,17 @@ impl Config {
                     message: "gate.sphinx_command must not be an empty array".to_string(),
                 });
             }
-            Some(cmd) => cmd,
+            Some(cmd) => {
+                if let Some(pos) = cmd.iter().position(|s| s.is_empty()) {
+                    return Err(Error::Config {
+                        message: format!(
+                            "gate.sphinx_command element at index {pos} is an empty string; \
+                             all sphinx_command elements must be non-empty"
+                        ),
+                    });
+                }
+                cmd
+            }
         };
 
         Ok(Config {
@@ -244,13 +260,34 @@ struct RawGate {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn absolutize_path(root: &Path, rel: &str) -> PathBuf {
-    let p = Path::new(rel);
-    if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        root.join(p)
+/// Join `root` and `rel` into an absolute, **lexically** normalised path.
+///
+/// Unlike [`project::absolutize`] this does *not* call `fs::canonicalize`;
+/// the path need not exist yet. `..` and `.` components are folded away by
+/// walking the component list: `.` is skipped, `..` pops the last segment.
+fn resolve_against_root(root: &Path, rel: &str) -> PathBuf {
+    // Start from the already-absolute root (or use `rel` directly when absolute).
+    let base = {
+        let p = Path::new(rel);
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            root.join(p)
+        }
+    };
+
+    // Lexically normalise: fold `.` and `..` without hitting the filesystem.
+    let mut out = PathBuf::new();
+    for component in base.components() {
+        match component {
+            Component::CurDir => {} // skip `.`
+            Component::ParentDir => {
+                out.pop();
+            } // fold `..`
+            c => out.push(c),
+        }
     }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -673,6 +710,120 @@ sphinx_command = ["python", "-m", "sphinx"]
         let (_tmp, project) = make_project(toml);
         let cfg = Config::load(&project).unwrap();
         assert_eq!(cfg.sphinx_command, vec!["python", "-m", "sphinx"]);
+    }
+
+    // ------------------------------------------------------------------
+    // Path normalization: resolve_against_root must not leave .. or . components
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn spec_dir_with_dotdot_is_normalized() {
+        // spec_dir = "spec/../docs" should yield <root>/docs with no ".." components.
+        let toml = r#"
+[tool.patdhlk-skills]
+spec_dir = "spec/../docs"
+"#;
+        let (_tmp, project) = make_project(toml);
+        let cfg = Config::load(&project).unwrap();
+        let rendered = cfg.spec_dir.display().to_string();
+        assert!(
+            !rendered.contains(".."),
+            "spec_dir must not contain '..', got: {rendered}"
+        );
+        assert!(
+            cfg.spec_dir.ends_with("docs"),
+            "spec_dir should resolve to docs, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn spec_dir_with_single_dot_is_normalized() {
+        // spec_dir = "spec/./sub" should yield <root>/spec/sub with no "." components.
+        let toml = r#"
+[tool.patdhlk-skills]
+spec_dir = "spec/./sub"
+"#;
+        let (_tmp, project) = make_project(toml);
+        let cfg = Config::load(&project).unwrap();
+        let rendered = cfg.spec_dir.display().to_string();
+        // The path must not contain "/./", and ends_with checks the suffix.
+        assert!(
+            !rendered.contains("/./"),
+            "spec_dir must not contain '.', got: {rendered}"
+        );
+        assert!(
+            cfg.spec_dir.ends_with("spec/sub"),
+            "spec_dir should resolve to spec/sub, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn needs_json_with_dotdot_is_normalized() {
+        let toml = r#"
+[tool.patdhlk-skills.gate]
+needs_json = "spec/../other/_build/needs.json"
+"#;
+        let (_tmp, project) = make_project(toml);
+        let cfg = Config::load(&project).unwrap();
+        let rendered = cfg.needs_json.display().to_string();
+        assert!(
+            !rendered.contains(".."),
+            "needs_json must not contain '..', got: {rendered}"
+        );
+        assert!(
+            cfg.needs_json.ends_with("other/_build/needs.json"),
+            "got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn issue_doc_with_dotdot_is_normalized() {
+        let toml = r#"
+[tool.patdhlk-skills]
+issue_doc = "spec/../issues/index.rst"
+"#;
+        let (_tmp, project) = make_project(toml);
+        let cfg = Config::load(&project).unwrap();
+        let rendered = cfg.issue_doc.unwrap().display().to_string();
+        assert!(
+            !rendered.contains(".."),
+            "issue_doc must not contain '..', got: {rendered}"
+        );
+        assert!(rendered.ends_with("issues/index.rst"), "got: {rendered}");
+    }
+
+    // ------------------------------------------------------------------
+    // Empty-string elements in sphinx_command are rejected
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn sphinx_command_with_empty_string_element_is_config_error() {
+        let toml = r#"
+[tool.patdhlk-skills.gate]
+sphinx_command = ["uv", "", "sphinx-build"]
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(
+            matches!(err, Error::Config { .. }),
+            "expected Config error, got: {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("sphinx_command"),
+            "error must mention sphinx_command, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn sphinx_command_with_leading_empty_string_is_config_error() {
+        let toml = r#"
+[tool.patdhlk-skills.gate]
+sphinx_command = [""]
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
     }
 
     // ------------------------------------------------------------------

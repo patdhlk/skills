@@ -17,10 +17,9 @@ impl Project {
         for dir in start.ancestors() {
             let candidate = dir.join(CONFIG_FILE);
             if candidate.is_file() {
-                return Ok(Project {
-                    root: absolutize(dir)?,
-                    config_path: candidate,
-                });
+                let root = canonicalize_dir(dir)?;
+                let config_path = root.join(CONFIG_FILE);
+                return Ok(Project { root, config_path });
             }
         }
         Err(Error::Config {
@@ -32,30 +31,35 @@ impl Project {
     }
 
     /// Resolve a project from an explicit config path (the `--config` override).
-    /// The file's parent directory becomes the project root. The root is always
-    /// absolute, even when `path` is a bare filename like `ubproject.toml`.
+    /// The file's parent directory becomes the project root. Both `root` and
+    /// `config_path` are always absolute (canonicalized), even when `path` is
+    /// a bare filename like `ubproject.toml`.
     pub fn from_config_path(path: &Path) -> Result<Project, Error> {
         if !path.is_file() {
             return Err(Error::Config {
                 message: format!("config file not found: {}", path.display()),
             });
         }
-        // A bare filename has an empty parent (`Some("")`); treat that as the cwd.
-        let parent = match path.parent() {
-            Some(p) if p.as_os_str().is_empty() => Path::new("."),
-            Some(p) => p,
-            None => Path::new("."),
-        };
-        Ok(Project {
-            root: absolutize(parent)?,
-            config_path: path.to_path_buf(),
-        })
+        // Canonicalize the config file itself so `config_path` is always absolute,
+        // matching what `discover` stores.
+        let config_path = path.canonicalize().map_err(|e| Error::Config {
+            message: format!("cannot resolve config path {}: {e}", path.display()),
+        })?;
+        // The canonical parent is the project root (guaranteed non-empty after
+        // canonicalize, since the file exists).
+        let root = config_path
+            .parent()
+            .expect("canonical file path always has a parent")
+            .to_path_buf();
+        Ok(Project { root, config_path })
     }
 }
 
-/// Resolve a directory to an absolute, canonical path so callers see a stable root
-/// regardless of whether they passed a relative path or a bare filename.
-fn absolutize(dir: &Path) -> Result<PathBuf, Error> {
+/// Canonicalize `dir` via `fs::canonicalize` (resolves symlinks; the path must exist).
+///
+/// Unlike `resolve_against_root` in `config.rs`, this hits the filesystem and is
+/// fallible — use it only for paths that are known to exist at call time.
+fn canonicalize_dir(dir: &Path) -> Result<PathBuf, Error> {
     dir.canonicalize().map_err(|e| Error::Config {
         message: format!("cannot resolve project root {}: {e}", dir.display()),
     })
@@ -105,6 +109,28 @@ mod tests {
         let missing = tmp.path().join("nope.toml");
         let err = Project::from_config_path(&missing).unwrap_err();
         assert!(matches!(err, Error::Config { .. }));
+    }
+
+    /// `from_config_path` must store an absolute `config_path`, even when
+    /// the caller passes a bare filename like `ubproject.toml`.
+    #[test]
+    fn from_config_path_stores_absolute_config_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().canonicalize().unwrap();
+        std::fs::write(dir.join(CONFIG_FILE), "").unwrap();
+
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let result = Project::from_config_path(Path::new(CONFIG_FILE));
+        std::env::set_current_dir(&original).unwrap();
+
+        let project = result.unwrap();
+        assert!(
+            project.config_path.is_absolute(),
+            "config_path must be absolute, got {}",
+            project.config_path.display()
+        );
+        assert_eq!(project.config_path, dir.join(CONFIG_FILE));
     }
 
     /// A bare `--config ubproject.toml` must yield an absolute root (the cwd),

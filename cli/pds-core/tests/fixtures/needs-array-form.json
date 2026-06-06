@@ -1,0 +1,45 @@
+{
+  "current_version": "main",
+  "project": "test-project",
+  "versions": {
+    "main": {
+      "creator": "sphinx-needs-old",
+      "needs": [
+        {
+          "id": "FEAT_0001",
+          "type": "feat",
+          "title": "Alpha feature",
+          "status": "ready-for-agent",
+          "content": "Implements the alpha capability.",
+          "tags": ["alpha", "core"],
+          "links": [],
+          "implements": ["ISSUE_0002"],
+          "kind": "enhancement",
+          "github": null
+        },
+        {
+          "id": "ISSUE_0001",
+          "type": "issue",
+          "title": "First issue",
+          "status": "needs-triage",
+          "content": "Initial backlog entry.",
+          "tags": ["backlog"],
+          "links": [],
+          "kind": "feature",
+          "github": "https://github.com/example/repo/issues/1"
+        },
+        {
+          "id": "ISSUE_0002",
+          "type": "issue",
+          "title": "Second issue",
+          "status": null,
+          "content": "",
+          "tags": [],
+          "links": ["ISSUE_0001"],
+          "kind": "bug",
+          "github": null
+        }
+      ]
+    }
+  }
+}

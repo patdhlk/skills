@@ -1,0 +1,151 @@
+# Custom dist publish job: publish the workspace to crates.io in dependency
+# order (pds-core BEFORE pds-cli, because pds-cli depends on pds-core).
+#
+# Wired in via `publish-jobs = ["./publish-crates"]` in dist-workspace.toml.
+# dist's release.yml calls this as a reusable workflow (custom-publish-crates)
+# AFTER the `host` job has created the GitHub Release, passing the dist plan as
+# a JSON string and inheriting secrets.
+#
+# Why a custom job instead of a built-in: dist (axodotdev, 0.32.0) has no
+# built-in crates.io publisher (its publish-jobs are npm / homebrew only). A
+# custom job is dist's documented path for extra publish steps. We get a hard
+# ordering guarantee by publishing the
+# library first, waiting for it to appear on the index, then the binary crate.
+#
+# SECRET REQUIRED: CARGO_REGISTRY_TOKEN must be added to the repository's
+# Actions secrets (Settings -> Secrets and variables -> Actions). It is read by
+# `cargo publish` via the CARGO_REGISTRY_TOKEN env var. Without it, this job
+# fails. `secrets: inherit` in release.yml forwards it from the repo.
+#
+# IDEMPOTENCY: each publish step guards against re-running a partially completed
+# release. Before calling `cargo publish`, we query the sparse crates.io index
+# (https://index.crates.io) for the exact crate+version. If it's already there
+# we log and skip — the existing upload is immutable and correct. The same
+# primitive (sparse-index check) is used for the post-publish wait, so both
+# the skip-guard and the poll share identical logic.
+#
+# Sparse-index URL scheme (names >= 4 chars): <first2>/<next2>/<name>
+# e.g. pds-core -> pd/s-/pds-core
+# Each JSON-lines entry has a "vers" field; we grep for the exact version string.
+name: Publish to crates.io
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  publish-crates:
+    runs-on: ubuntu-22.04
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install Rust toolchain from rust-toolchain.toml
+        working-directory: cli
+        run: rustup show active-toolchain
+
+      # Shared helper: check whether <crate>@<version> is already visible on
+      # the sparse index. Exported as a shell function used by both the
+      # skip-guard and the post-publish wait steps below.
+      #
+      # crates_io_has_version <crate> <version>
+      #   returns 0 (true) if the version is present, 1 if absent.
+      #   Sparse-index URL: https://index.crates.io/<c1><c2>/<c3><c4>/<crate>
+      #   where c1..c4 are the first four characters of the crate name.
+      #
+      # NOTE: this function is re-defined inline in each step that needs it
+      # because GitHub Actions does not share shell state across steps.
+
+      # pds-core must be on crates.io before pds-cli, which declares
+      # `pds-core = { version = "0.1.0" }`. `cargo publish -p` resolves that
+      # dependency against the registry, so the library has to land first.
+      - name: Publish pds-core
+        working-directory: cli
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          crates_io_has_version() {
+            local crate="$1" vers="$2"
+            local c1="${crate:0:2}" c2="${crate:2:2}"
+            local url="https://index.crates.io/${c1}/${c2}/${crate}"
+            local count
+            count=$(curl -sf "$url" | grep -cF "\"vers\":\"${vers}\"" || true)
+            [ "${count}" -gt 0 ]
+          }
+
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "pds-core") | .version')"
+
+          if crates_io_has_version pds-core "${version}"; then
+            echo "pds-core ${version} already published — skipping"
+          else
+            echo "Publishing pds-core ${version}"
+            cargo publish -p pds-core
+          fi
+
+      # Wait for the freshly published pds-core to become available on the
+      # crates.io sparse index before publishing the dependent binary crate.
+      # The index can lag a few seconds behind the publish API; poll until the
+      # exact version appears. Uses the sparse index (not `cargo search`) because
+      # that is what `cargo publish` resolves against.
+      - name: Wait for pds-core to appear on the sparse index
+        working-directory: cli
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          crates_io_has_version() {
+            local crate="$1" vers="$2"
+            local c1="${crate:0:2}" c2="${crate:2:2}"
+            local url="https://index.crates.io/${c1}/${c2}/${crate}"
+            local count
+            count=$(curl -sf "$url" | grep -cF "\"vers\":\"${vers}\"" || true)
+            [ "${count}" -gt 0 ]
+          }
+
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "pds-core") | .version')"
+          echo "Waiting for pds-core ${version} on the sparse index"
+          for attempt in $(seq 1 30); do
+            if crates_io_has_version pds-core "${version}"; then
+              echo "pds-core ${version} is available"
+              exit 0
+            fi
+            echo "attempt ${attempt}/30: not yet visible, sleeping 10s"
+            sleep 10
+          done
+          echo "::error::pds-core ${version} did not appear on the sparse index in 300s" >&2
+          exit 1
+
+      - name: Publish pds-cli
+        working-directory: cli
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          crates_io_has_version() {
+            local crate="$1" vers="$2"
+            local c1="${crate:0:2}" c2="${crate:2:2}"
+            local url="https://index.crates.io/${c1}/${c2}/${crate}"
+            local count
+            count=$(curl -sf "$url" | grep -cF "\"vers\":\"${vers}\"" || true)
+            [ "${count}" -gt 0 ]
+          }
+
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "pds-cli") | .version')"
+
+          if crates_io_has_version pds-cli "${version}"; then
+            echo "pds-cli ${version} already published — skipping"
+          else
+            echo "Publishing pds-cli ${version}"
+            cargo publish -p pds-cli
+          fi

@@ -1,0 +1,33 @@
+# dist (cargo-dist, axodotdev upstream) release pipeline configuration.
+#
+# The Cargo workspace lives in cli/, not at the repo root, so dist's workspace
+# member uses the `cargo:<relative-path>` form to point at it. dist generates
+# .github/workflows/release.yml at the repo root while reading crate metadata
+# from cli/Cargo.toml. See cli/README.md for the install one-liner.
+[workspace]
+members = ["cargo:cli/"]
+
+# Config for 'dist'
+[dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.32.0"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = ["shell"]
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-musl", "x86_64-apple-darwin", "x86_64-unknown-linux-musl"]
+# Publish jobs to run in CI
+publish-jobs = ["./publish-crates"]
+# Checksums to generate for each App
+checksum = "sha256"
+# Path that installers should place binaries in
+install-path = "CARGO_HOME"
+# Whether to install an updater program
+install-updater = false
+# release.yml is intentionally hand-edited after `dist generate` (precise v*
+# tag-only trigger; an early plugin.json version-consistency job). This escape
+# hatch tells dist NOT to fail its `generate --check` on the modified workflow,
+# so `dist plan`/`dist host` in CI don't reject our edits. When regenerating,
+# run `dist generate` then re-apply the two edits documented in release.yml.
+allow-dirty = ["ci"]

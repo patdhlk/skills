@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+keywords = ["sphinx-needs", "requirements", "traceability"]
+description = "Library powering pds — sphinx-needs corpus gate-and-query primitives"
+categories = ["development-tools"]
+readme = "../README.md"
 
 [dependencies]
 thiserror = "2"

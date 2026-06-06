@@ -7,3 +7,8 @@ spec/_build/
 
 # Claude Code harness artifacts
 .claude/scheduled_tasks.lock
+
+# Cargo / dist build output. The workspace lives in cli/ (ignored by
+# cli/.gitignore), but `dist build` writes artifacts to a repo-root target/
+# (target/distrib/*.tar.xz, installer, checksums).
+/target/

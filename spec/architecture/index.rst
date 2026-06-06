@@ -2,7 +2,8 @@ Architecture Decisions
 ======================
 
 The design of patdhlk-skills, decided in the founding grilling session
-(2026-06-04) and recorded here as the first dogfooded artifacts.
+(2026-06-04) and subsequent grilling sessions, recorded here as
+dogfooded artifacts.
 
 .. arch-decision:: Fresh repo as drop-in replacement for mattpocock/skills
    :id: ADR_0001
@@ -227,3 +228,126 @@ The design of patdhlk-skills, decided in the founding grilling session
 
    **Consequences.** ✅ Two channels, near-zero extra cost. ❌ Layout is
    constrained by both conventions at once.
+
+.. arch-decision:: pds — a Rust gate-and-query CLI
+   :id: ADR_0014
+   :status: accepted
+
+   **Context.** The mechanized checks beyond the build-time schema —
+   body lint, verdict checking, next-action queries, duplicate detection
+   (:need:`ISSUE_0013`–:need:`ISSUE_0018`) — were first sketched as make
+   targets plus ad-hoc jq. Skills and CI need them deterministic, fast,
+   and identical across consumer repos. Decided in the grilling session
+   of 2026-06-06.
+
+   **Decision.** A Rust CLI, binary ``pds``, crate ``pds-cli``, living
+   in this repo at ``cli/`` and versioned in lockstep with the skills.
+   Scope: build orchestration (shells out to the configured builder),
+   checks, and queries — verbs ``build``, ``check``, ``lint``,
+   ``verdict-check``, ``next``, ``status``, ``search``, ``dedup``.
+   Hard invariant: **pds never mutates the spec** — skills author, pds
+   judges. Output is JSON-only on stdout (logs to stderr); exit codes
+   are uniform: 0 = clean, 1 = violations found (read the JSON, fix the
+   corpus), 2 = tool/config error (stop and escalate). Configuration
+   lives in ``[tool.patdhlk-skills.*]`` sub-tables; an absent table
+   means the check is off; config referencing undeclared types or
+   rubrics is a hard error. v1 speaks the local backend only: ``next``
+   and ``status`` on a github-backend repo exit 2 with the equivalent
+   ``gh`` command, and their JSON shape is versioned so a github driver
+   can land without skill-text changes. Retrieval for ``search`` and
+   ``dedup`` is BM25 (in-memory, deterministic, offline) by default;
+   neural embeddings come later behind a cargo feature and
+   ``--engine embed`` with lazy model download. ``dedup`` exits 1 on
+   hits at/above threshold (a pre-filing gate); ``search`` always
+   exits 0. Distribution: prebuilt static binaries from GitHub Releases
+   (``aarch64/x86_64-apple-darwin``, ``aarch64/x86_64-linux-musl``) via
+   an ``install.sh``, with ``cargo install pds-cli`` as fallback;
+   ``/setup-patdhlk-skills`` owns detection and install, as it does for
+   ``ubc``.
+
+   **Consequences.** ✅ One deterministic entry point for gates and
+   queries; agents branch on exit codes instead of parsing prose.
+   ✅ ``make strict`` becomes a thin alias for ``pds check``.
+   ❌ The repo grows a Rust toolchain, CI matrix, and release pipeline.
+   ❌ macOS Gatekeeper: distributed binaries need Developer ID signing
+   and notarization (or a documented quarantine story) in the release
+   pipeline.
+
+.. arch-decision:: Verdicts are needs directives with derived IDs
+   :id: ADR_0015
+   :status: accepted
+
+   **Context.** Review judgments (triage verdicts, req-quality reviews)
+   must be machine-checkable so a gate can require them
+   (:need:`ISSUE_0014`). JSON receipt files would need a second storage
+   location, a second read path, and a carve-out from :need:`ADR_0002`.
+
+   **Decision.** A verdict is a sphinx-needs directive (new ``verdict``
+   type, mapped in the role map). One verdict per judged need, linked to
+   it, with a derived stable ID ``VERDICT_<judged-id>`` — a documented
+   exception to :need:`ADR_0008`; re-review edits it in place and git
+   history is the audit trail (:need:`ADR_0005` philosophy). Verdicts
+   are status-less: staleness is computed, never declared. Fields:
+   ``:rubric:`` (which rubric was judged), ``:axes_failed:`` (failed
+   axis names; pass is *derived* — true iff empty — so "pass with a
+   failing axis" is unrepresentable), ``:fingerprint:``
+   (``sha256:<first-16-hex>`` over the judged need's title + normalized
+   body; option-field edits like status flips do not invalidate).
+   Findings are body prose. Verdicts live in ``spec/verdicts/``, are
+   excluded from default needtables, and are themselves exempt from
+   lint and from requiring verdicts. ``pds verdict-check`` reports four
+   buckets: ``missing``, ``failing``, ``stale`` (fingerprint mismatch),
+   ``malformed`` (schema-invalid or unknown axis names).
+
+   **Consequences.** ✅ One read path (needs.json) for everything;
+   verdict coverage is a graph query, visible in the docs. ✅ The
+   malformed-pass class is impossible by construction. ❌ The corpus
+   roughly doubles where verdicts are required. ❌ Two ID schemes
+   coexist (dense max+1 and derived).
+
+.. arch-decision:: Rubrics declared in config, semantics in skills
+   :id: ADR_0016
+   :status: accepted
+
+   **Context.** ``pds`` must reject unknown axis names on verdicts
+   (:need:`ADR_0015`), but what an axis *means* is judged by the AI
+   review skills, and consumer repos tailor their type catalogs
+   (:need:`ADR_0004`) — the binary cannot hardcode this repo's axes.
+
+   **Decision.** Rubrics are config:
+   ``[tool.patdhlk-skills.rubrics.<name>] axes = [...]`` declares the
+   axis set; ``[tool.patdhlk-skills.verdicts] require = { <type> =
+   "<rubric>" }`` maps need types to required rubrics. ``pds``
+   validates names and structure only; axis semantics live in the
+   review skills' prose, where the judge reads them. Default rubric
+   tables are scaffolded by ``/setup-patdhlk-skills`` — defaults live
+   in the plugin, not the binary. A ``require`` entry naming an
+   undeclared rubric is a config hard error (exit 2).
+
+   **Consequences.** ✅ The binary stays generic; rubric changes need
+   no Rust release. ❌ Axis meaning exists only in skill prose —
+   rubric/skill naming discipline is convention, not enforced.
+
+.. arch-decision:: The gate builds needs, not html
+   :id: ADR_0017
+   :status: accepted
+
+   **Context.** The strict gate (:need:`ADR_0007`) was
+   ``sphinx-build -W -b html`` plus a separate needs.json build — two
+   builds per mutation, and the gating diagnostics (unknown directives,
+   broken refs, schema violations, duplicate IDs) come from
+   parsing/resolution, not HTML rendering.
+
+   **Decision.** ``pds check`` runs a per-builder adapter with two
+   obligations: produce a fresh needs.json and run strict fail-closed
+   diagnostics. For ``builder = "ubc"``: ``ubc check`` + ``ubc build
+   needs``. For ``builder = "sphinx-build"``: ``uv run sphinx-build -W
+   -b needs`` (one build serves both obligations), with a config escape
+   hatch for projects without ``uv``. The html build is demoted to a
+   docs-publishing step in CI and is no longer the per-mutation gate.
+   A divergence (needs-build green, html red) is a ``pds`` bug to fix,
+   not a reason to gate on html again.
+
+   **Consequences.** ✅ One fast build per mutation instead of two.
+   ❌ Rendering-only warnings (toctree gaps, malformed inline markup in
+   prose) surface only at publish time.

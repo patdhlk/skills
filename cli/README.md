@@ -125,11 +125,12 @@ Releases are tag-driven. The full runbook is one commit plus one tag push:
    ([`cli/pds-cli/tests/version_lockstep.rs`](pds-cli/tests/version_lockstep.rs))
    fails CI if they drift, and `release.yml` re-checks the tag against
    `plugin.json` before any build runs.
-2. **Tag and push the tag** (not just the branch):
+2. **Push the bump commit, then tag and push the tag:**
 
    ```sh
+   git push origin main        # the version-bump commit
    git tag v<version>          # e.g. git tag v0.2.0
-   git push origin v<version>
+   git push origin v<version>  # this push triggers the release
    ```
 
    The `v[0-9]+.[0-9]+.[0-9]+*` tag push triggers

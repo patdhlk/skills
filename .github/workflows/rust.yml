@@ -1,5 +1,8 @@
 # Rust CI gate for the pds workspace (cli/): fmt, clippy (-D warnings), and
-# tests must all pass. Runs only when cli/** or this file changes.
+# tests must all pass. Runs only when cli/**, this file, or the plugin
+# manifest changes. The version-lockstep test (pds-cli/tests/version_lockstep.rs)
+# reads .claude-plugin/plugin.json at runtime, so a plugin-version-only bump
+# must trigger this job to catch mismatches immediately.
 name: rust
 
 on:
@@ -8,10 +11,12 @@ on:
     paths:
       - "cli/**"
       - ".github/workflows/rust.yml"
+      - ".claude-plugin/plugin.json"
   pull_request:
     paths:
       - "cli/**"
       - ".github/workflows/rust.yml"
+      - ".claude-plugin/plugin.json"
 
 jobs:
   ci:

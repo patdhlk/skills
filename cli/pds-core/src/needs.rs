@@ -149,18 +149,23 @@ impl NeedsCorpus {
             ),
         })?;
 
-        let raw_needs: Vec<&Map<String, Value>> = match needs_val {
+        // Each entry pairs the raw JSON object with an optional array index.
+        // Object form carries None (BTreeMap-sorted position is misleading);
+        // array form carries Some(i) for positional error messages.
+        let raw_needs: Vec<(Option<usize>, &Map<String, Value>)> = match needs_val {
             Value::Object(map) => {
                 // Object form: keyed by id.
                 map.values()
                     .map(|v| {
-                        v.as_object().ok_or_else(|| Error::Tool {
-                            message: format!(
-                                "{}: each entry in the needs object must be a JSON object, got {}",
-                                path.display(),
-                                value_kind(v)
-                            ),
-                        })
+                        v.as_object()
+                            .map(|obj| (None, obj))
+                            .ok_or_else(|| Error::Tool {
+                                message: format!(
+                                    "{}: each entry in the needs object must be a JSON object, got {}",
+                                    path.display(),
+                                    value_kind(v)
+                                ),
+                            })
                     })
                     .collect::<Result<Vec<_>, _>>()?
             }
@@ -169,13 +174,15 @@ impl NeedsCorpus {
                 arr.iter()
                     .enumerate()
                     .map(|(i, v)| {
-                        v.as_object().ok_or_else(|| Error::Tool {
-                            message: format!(
-                                "{}: needs[{i}] must be a JSON object, got {}",
-                                path.display(),
-                                value_kind(v)
-                            ),
-                        })
+                        v.as_object()
+                            .map(|obj| (Some(i), obj))
+                            .ok_or_else(|| Error::Tool {
+                                message: format!(
+                                    "{}: needs[{i}] must be a JSON object, got {}",
+                                    path.display(),
+                                    value_kind(v)
+                                ),
+                            })
                     })
                     .collect::<Result<Vec<_>, _>>()?
             }
@@ -192,8 +199,17 @@ impl NeedsCorpus {
 
         // --- parse individual needs ---
         let mut needs = BTreeMap::new();
-        for (index, obj) in raw_needs.into_iter().enumerate() {
+        for (index, obj) in raw_needs {
             let need = parse_need(path, index, obj)?;
+            if needs.contains_key(&need.id) {
+                return Err(Error::Tool {
+                    message: format!(
+                        "{}: duplicate need id {:?} — each id must appear exactly once in the corpus",
+                        path.display(),
+                        need.id
+                    ),
+                });
+            }
             needs.insert(need.id.clone(), need);
         }
 
@@ -226,28 +242,56 @@ impl NeedsCorpus {
 // ---------------------------------------------------------------------------
 
 /// Parse a single need object, enforcing required fields and extracting extras.
-fn parse_need(path: &Path, index: usize, obj: &Map<String, Value>) -> Result<Need, Error> {
+///
+/// `array_index` is `Some(i)` for array-form needs (meaningful position) and
+/// `None` for object-form needs (BTreeMap-sorted position would be misleading).
+fn parse_need(
+    path: &Path,
+    array_index: Option<usize>,
+    obj: &Map<String, Value>,
+) -> Result<Need, Error> {
     // Helper: required string field.
     let require_str = |field: &str| -> Result<String, Error> {
         match obj.get(field) {
             Some(Value::String(s)) => Ok(s.clone()),
-            Some(other) => Err(Error::Tool {
-                message: format!(
-                    "{}: need at index {index} has field {:?} with non-string value {}",
-                    path.display(),
-                    field,
-                    value_kind(other)
-                ),
-            }),
+            Some(other) => {
+                let id_hint = obj.get("id").and_then(Value::as_str).unwrap_or("<unknown>");
+                Err(Error::Tool {
+                    message: match array_index {
+                        Some(i) => format!(
+                            "{}: needs[{i}] (id {:?}) has field {:?} with non-string value {}",
+                            path.display(),
+                            id_hint,
+                            field,
+                            value_kind(other)
+                        ),
+                        None => format!(
+                            "{}: need {:?} has field {:?} with non-string value {}",
+                            path.display(),
+                            id_hint,
+                            field,
+                            value_kind(other)
+                        ),
+                    },
+                })
+            }
             None => {
                 let id_hint = obj.get("id").and_then(Value::as_str).unwrap_or("<unknown>");
                 Err(Error::Tool {
-                    message: format!(
-                        "{}: need {:?} (index {index}) is missing required field {:?}",
-                        path.display(),
-                        id_hint,
-                        field
-                    ),
+                    message: match array_index {
+                        Some(i) => format!(
+                            "{}: needs[{i}] (id {:?}) is missing required field {:?}",
+                            path.display(),
+                            id_hint,
+                            field
+                        ),
+                        None => format!(
+                            "{}: need {:?} is missing required field {:?}",
+                            path.display(),
+                            id_hint,
+                            field
+                        ),
+                    },
                 })
             }
         }
@@ -795,5 +839,154 @@ mod tests {
         let corpus = load_inline(json).unwrap();
         assert!(corpus.is_empty());
         assert_eq!(corpus.len(), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Duplicate ID detection (Finding 1)
+    // -----------------------------------------------------------------------
+
+    /// Array form with two needs sharing the same id must fail with Error::Tool
+    /// naming the duplicate id.  (Object-form JSON collapses duplicate keys at
+    /// the serde_json level, so the reachable duplicate case is array form.)
+    #[test]
+    fn array_form_duplicate_id_is_tool_error_naming_the_id() {
+        let json = r#"{
+            "current_version": "",
+            "project": "test",
+            "versions": {
+                "": {
+                    "needs": [
+                        { "id": "ISSUE_0001", "type": "issue", "title": "First" },
+                        { "id": "ISSUE_0001", "type": "issue", "title": "Duplicate" }
+                    ]
+                }
+            }
+        }"#;
+        let err = load_inline(json).unwrap_err();
+        assert!(
+            matches!(err, Error::Tool { .. }),
+            "duplicate id must be Error::Tool, got: {err}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("ISSUE_0001"),
+            "error must name the duplicate id, got: {msg}"
+        );
+        assert!(
+            msg.contains("duplicate"),
+            "error must say 'duplicate', got: {msg}"
+        );
+    }
+
+    /// Object form where the map key differs from the inner "id" field:
+    /// inner id wins (keys are ignored).  If that inner id collides with
+    /// another need's id the duplicate check fires.
+    #[test]
+    fn object_form_inner_id_wins_over_map_key() {
+        // key "KEY_0001" but inner id is "REAL_0001"  — should load fine.
+        let json = r#"{
+            "current_version": "",
+            "project": "test",
+            "versions": {
+                "": {
+                    "needs": {
+                        "KEY_0001": { "id": "REAL_0001", "type": "feat", "title": "T" }
+                    }
+                }
+            }
+        }"#;
+        let corpus = load_inline(json).unwrap();
+        // The need is indexed under the inner id.
+        assert!(corpus.get("REAL_0001").is_some(), "inner id must be used");
+        assert!(corpus.get("KEY_0001").is_none(), "map key is not stored");
+    }
+
+    /// Object form where two entries have different map keys but the same inner
+    /// "id" field triggers the duplicate check.
+    #[test]
+    fn object_form_inner_id_collision_is_tool_error() {
+        let json = r#"{
+            "current_version": "",
+            "project": "test",
+            "versions": {
+                "": {
+                    "needs": {
+                        "A": { "id": "SAME_0001", "type": "feat", "title": "A" },
+                        "B": { "id": "SAME_0001", "type": "feat", "title": "B" }
+                    }
+                }
+            }
+        }"#;
+        let err = load_inline(json).unwrap_err();
+        assert!(
+            matches!(err, Error::Tool { .. }),
+            "inner-id collision must be Error::Tool, got: {err}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("SAME_0001"),
+            "error must name the duplicate id, got: {msg}"
+        );
+        assert!(
+            msg.contains("duplicate"),
+            "error must say 'duplicate', got: {msg}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Error message quality (Finding 2)
+    // -----------------------------------------------------------------------
+
+    /// Object-form parse errors must name the need id but must NOT include
+    /// a misleading BTreeMap-sorted "index N" in the message.
+    #[test]
+    fn object_form_error_names_id_without_misleading_index() {
+        let json = r#"{
+            "current_version": "",
+            "project": "test",
+            "versions": {
+                "": {
+                    "needs": {
+                        "ISSUE_0099": { "id": "ISSUE_0099", "type": "issue" }
+                    }
+                }
+            }
+        }"#;
+        let err = load_inline(json).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("ISSUE_0099"),
+            "object-form error must name the need id, got: {msg}"
+        );
+        // "index" or "index N" must not appear — it would be the BTreeMap position.
+        assert!(
+            !msg.contains("index"),
+            "object-form error must not contain 'index' (misleading BTreeMap position), got: {msg}"
+        );
+    }
+
+    /// Array-form parse errors should include the positional index for
+    /// actionable diagnostics.
+    #[test]
+    fn array_form_error_includes_position() {
+        let json = r#"{
+            "current_version": "",
+            "project": "test",
+            "versions": {
+                "": {
+                    "needs": [
+                        { "id": "ISSUE_0001", "type": "issue", "title": "Good" },
+                        { "id": "ISSUE_0002", "type": "issue" }
+                    ]
+                }
+            }
+        }"#;
+        let err = load_inline(json).unwrap_err();
+        let msg = err.to_string();
+        // The broken need is at index 1.
+        assert!(
+            msg.contains('[') && msg.contains('1'),
+            "array-form error must reference position 1, got: {msg}"
+        );
     }
 }

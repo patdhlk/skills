@@ -68,6 +68,45 @@ fn canonicalize_dir(dir: &Path) -> Result<PathBuf, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // ---------------------------------------------------------------------------
+    // cwd serialization guard
+    //
+    // `std::env::set_current_dir` mutates process-global state.  When tests run
+    // in parallel (the default on `cargo test`) any test that changes cwd can
+    // corrupt the cwd seen by a sibling test.  The fix is twofold:
+    //
+    //   1. All cwd-mutating tests hold `CWD_LOCK` for the duration of the
+    //      mutation (prevents concurrent cwd changes).
+    //   2. `CwdGuard` restores the original cwd on drop so a panicking test
+    //      cannot poison the cwd for the next holder of the lock.
+    // ---------------------------------------------------------------------------
+
+    static CWD_LOCK: Mutex<()> = Mutex::new(());
+
+    /// RAII guard: saves the current working directory on creation and restores
+    /// it on drop (including on panic).  Callers must hold `CWD_LOCK` for the
+    /// full lifetime of this guard.
+    struct CwdGuard {
+        original: PathBuf,
+    }
+
+    impl CwdGuard {
+        fn new() -> Self {
+            CwdGuard {
+                original: std::env::current_dir().expect("current_dir must succeed"),
+            }
+        }
+    }
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            // Best-effort restore — ignore errors so we do not panic in a
+            // destructor that is already running during a panic.
+            let _ = std::env::set_current_dir(&self.original);
+        }
+    }
 
     #[test]
     fn discover_finds_config_in_ancestor() {
@@ -113,16 +152,20 @@ mod tests {
 
     /// `from_config_path` must store an absolute `config_path`, even when
     /// the caller passes a bare filename like `ubproject.toml`.
+    ///
+    /// Uses `CWD_LOCK` + `CwdGuard` to prevent the cwd mutation from racing
+    /// with sibling tests.
     #[test]
     fn from_config_path_stores_absolute_config_path() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().canonicalize().unwrap();
         std::fs::write(dir.join(CONFIG_FILE), "").unwrap();
 
-        let original = std::env::current_dir().unwrap();
+        let _lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = CwdGuard::new();
         std::env::set_current_dir(&dir).unwrap();
         let result = Project::from_config_path(Path::new(CONFIG_FILE));
-        std::env::set_current_dir(&original).unwrap();
+        // _guard restores cwd on drop before lock is released.
 
         let project = result.unwrap();
         assert!(
@@ -135,17 +178,21 @@ mod tests {
 
     /// A bare `--config ubproject.toml` must yield an absolute root (the cwd),
     /// matching what `discover` returns — never a relative `"."`.
+    ///
+    /// Uses `CWD_LOCK` + `CwdGuard` to prevent the cwd mutation from racing
+    /// with sibling tests.
     #[test]
     fn from_config_path_bare_filename_yields_absolute_root() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().canonicalize().unwrap();
         std::fs::write(dir.join(CONFIG_FILE), "").unwrap();
 
+        let _lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = CwdGuard::new();
         // Run from inside the temp dir so the bare filename resolves there.
-        let original = std::env::current_dir().unwrap();
         std::env::set_current_dir(&dir).unwrap();
         let result = Project::from_config_path(Path::new(CONFIG_FILE));
-        std::env::set_current_dir(&original).unwrap();
+        // _guard restores cwd on drop before lock is released.
 
         let project = result.unwrap();
         assert!(

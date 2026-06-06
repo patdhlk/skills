@@ -46,8 +46,48 @@ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/patdhlk/skills/releases
 ```
 
 To pin a specific version, swap `latest` for the tag, e.g.
-`releases/download/v0.1.0/pds-cli-installer.sh`. The installer places the `pds`
+`releases/download/v0.2.0/pds-cli-installer.sh`. The installer places the `pds`
 binary in your Cargo bin directory (`$CARGO_HOME/bin`, default `~/.cargo/bin`).
+
+### macOS Gatekeeper
+
+The recommended `curl … | sh` install path above is **quarantine-free by
+construction**: the installer fetches the tarball with `curl`, and `curl` does
+not set the `com.apple.quarantine` attribute. Gatekeeper only quarantines files
+downloaded by a *browser* (Safari, Chrome, …), so the shell installer sidesteps
+it entirely.
+
+The macOS binaries are **ad-hoc signed**. On arm64 this happens automatically:
+Apple's linker ad-hoc signs every arm64 Mach-O (`codesign -dv` reports
+`flags=…(adhoc,linker-signed)`, `Signature=adhoc`), and that signature survives
+the tarball round-trip. arm64 macOS *requires* a valid (even ad-hoc) signature
+to run; x86_64 macOS does not require a signature at all. An unsigned,
+un-quarantined x86_64 binary runs fine.
+
+If you download the tarball (or a loose binary) with a **browser**, macOS
+attaches a quarantine flag and Gatekeeper will block the first run. Clear it,
+with your consent, before extracting:
+
+```sh
+# You downloaded this yourself and trust it; drop the browser quarantine flag.
+xattr -d com.apple.quarantine ~/Downloads/pds-cli-aarch64-apple-darwin.tar.xz
+```
+
+(Equivalently, right-click the extracted `pds` in Finder and choose **Open**
+once to approve it.) The ad-hoc signature is enough for Gatekeeper once the
+quarantine flag is gone.
+
+If you would rather not think about any of this, build locally — **locally
+compiled binaries are never quarantined**:
+
+```sh
+cargo install pds-cli
+```
+
+> Developer ID code signing and Apple notarization are not yet configured (no
+> certificates exist). They would let browser-downloaded binaries run without
+> the `xattr` step. Where they plug in is documented in the
+> [Releasing](#releasing) section below.
 
 ## Usage
 
@@ -73,6 +113,62 @@ for the full schema reference.
 builder  = "ubc"        # "ubc" or "sphinx-build"
 spec_dir = "spec"
 ```
+
+## Releasing
+
+Releases are tag-driven. The full runbook is one commit plus one tag push:
+
+1. **Bump the version in lockstep.** In a single commit, set
+   `workspace.package.version` in [`cli/Cargo.toml`](Cargo.toml) and
+   `.version` in `.claude-plugin/plugin.json` to the same new value. These two
+   must always match — the `version_lockstep` test
+   ([`cli/pds-cli/tests/version_lockstep.rs`](pds-cli/tests/version_lockstep.rs))
+   fails CI if they drift, and `release.yml` re-checks the tag against
+   `plugin.json` before any build runs.
+2. **Tag and push the tag** (not just the branch):
+
+   ```sh
+   git tag v<version>          # e.g. git tag v0.2.0
+   git push origin v<version>
+   ```
+
+   The `v[0-9]+.[0-9]+.[0-9]+*` tag push triggers
+   [`release.yml`](../.github/workflows/release.yml), which builds all four
+   targets with `dist`, creates the GitHub Release (binaries + SHA-256 sums +
+   `pds-cli-installer.sh`), then publishes to crates.io **core → cli**
+   ([`publish-crates.yml`](../.github/workflows/publish-crates.yml) publishes
+   `pds-core` first, waits for it to appear on the sparse index, then publishes
+   `pds-cli`).
+
+> **First release is `v0.2.0`.** The existing `v0.1.0` tag is historical — it
+> points at the skills-v1 milestone commit and predates this release pipeline;
+> do not reuse it.
+
+**Required secret:** `CARGO_REGISTRY_TOKEN` must exist in the repository's
+Actions secrets (Settings → Secrets and variables → Actions). `release.yml`
+forwards it via `secrets: inherit`; `cargo publish` reads it. Without it the
+crates.io publish job fails.
+
+### Developer ID signing / notarization (future)
+
+When Apple Developer ID certificates are available, macOS signing plugs into
+`dist` via the `macos-sign` key in the `[dist]` table of `dist-workspace.toml`:
+
+```toml
+[dist]
+macos-sign = true
+```
+
+With that enabled, `dist` (v0.32.0) runs `/usr/bin/codesign` against the
+binaries in CI, importing the cert into a temporary keychain via
+`/usr/bin/security`. It reads three repository secrets:
+`CODESIGN_CERTIFICATE` (base64-encoded `.p12`), `CODESIGN_CERTIFICATE_PASSWORD`,
+and `CODESIGN_IDENTITY` (the Developer ID identity string). That gives real
+Developer ID signing (a Team Identifier instead of `adhoc`). **Notarization**
+(stapling via Apple's `notarytool`) is *not* covered by `dist` v0.32.0 — it
+would need a separate post-build CI step (`xcrun notarytool submit … --wait`
+then `xcrun stapler staple`). Until then, the quarantine story above is the
+supported path.
 
 ## Contributing
 

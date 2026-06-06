@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use pds_core::{Error, Project};
-use serde_json::{Value, json};
+use pds_core::{Error, Outcome, Project};
+use serde_json::{Map, Value, json};
 
 #[derive(Parser)]
 #[command(
@@ -41,20 +41,27 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let verb = cli.command.verb();
     match run(&cli) {
-        Ok(value) => {
-            emit_success(verb, value);
-            ExitCode::SUCCESS
+        // Clean run => exit 0; corpus violations => exit 1. Both are successful runs.
+        Ok(outcome) => {
+            let failed = outcome.is_failed();
+            emit_success(verb, outcome.into_payload());
+            if failed {
+                ExitCode::from(1)
+            } else {
+                ExitCode::SUCCESS
+            }
         }
+        // Tool/config problems => exit 2.
         Err(err) => {
             emit_error(verb, &err);
-            ExitCode::from(err.exit_code() as u8)
+            ExitCode::from(err.exit_code())
         }
     }
 }
 
 /// Resolve the project, then dispatch the verb. Verbs are honest placeholders
 /// until Tasks 3/4 wire in build/check logic.
-fn run(cli: &Cli) -> Result<Value, Error> {
+fn run(cli: &Cli) -> Result<Outcome, Error> {
     let _project = resolve_project(cli)?;
     Err(Error::Tool {
         message: format!("not implemented: {}", cli.command.verb()),
@@ -73,11 +80,12 @@ fn resolve_project(cli: &Cli) -> Result<Project, Error> {
     }
 }
 
-/// Print the single success JSON object on stdout.
-fn emit_success(verb: &str, value: Value) {
+/// Print the single success JSON object on stdout. The payload is already a JSON
+/// object, so the envelope and payload merge without any shape check.
+fn emit_success(verb: &str, payload: Map<String, Value>) {
     let mut obj = json!({ "schema": 1, "verb": verb });
-    if let (Some(map), Value::Object(extra)) = (obj.as_object_mut(), value) {
-        map.extend(extra);
+    if let Some(map) = obj.as_object_mut() {
+        map.extend(payload);
     }
     println!("{obj}");
 }

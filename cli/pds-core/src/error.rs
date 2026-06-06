@@ -2,8 +2,10 @@ use thiserror::Error;
 
 /// Failures classified by the pds exit contract.
 ///
-/// `Config` and `Tool` both map to exit code 2; `Violations` is reserved for
-/// exit code 1 (corpus violations) and gains structure in later tasks.
+/// `Error` is exit-code-2-only: it signals a tool or configuration problem that
+/// prevented a verb from running. Corpus violations are *not* errors — they are a
+/// successful verb run whose [`crate::Outcome`] carries non-empty findings and maps
+/// to exit code 1.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("config error: {message}")]
@@ -11,16 +13,12 @@ pub enum Error {
 
     #[error("tool error: {message}")]
     Tool { message: String },
-
-    #[error("{count} violation(s) found")]
-    Violations { count: usize },
 }
 
 impl Error {
-    /// Process exit code per the pds contract: 1 = violations, 2 = tool/config.
-    pub fn exit_code(&self) -> i32 {
+    /// Process exit code per the pds contract: tool/config errors are always 2.
+    pub fn exit_code(&self) -> u8 {
         match self {
-            Error::Violations { .. } => 1,
             Error::Config { .. } | Error::Tool { .. } => 2,
         }
     }
@@ -30,7 +28,6 @@ impl Error {
         match self {
             Error::Config { .. } => "config",
             Error::Tool { .. } => "tool",
-            Error::Violations { .. } => "violations",
         }
     }
 }
@@ -55,7 +52,6 @@ mod tests {
             .exit_code(),
             2
         );
-        assert_eq!(Error::Violations { count: 3 }.exit_code(), 1);
     }
 
     #[test]

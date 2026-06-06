@@ -1,0 +1,75 @@
+# Custom dist publish job: publish the workspace to crates.io in dependency
+# order (pds-core BEFORE pds-cli, because pds-cli depends on pds-core).
+#
+# Wired in via `publish-jobs = ["./publish-crates"]` in dist-workspace.toml.
+# dist's release.yml calls this as a reusable workflow (custom-publish-crates)
+# AFTER the `host` job has created the GitHub Release, passing the dist plan as
+# a JSON string and inheriting secrets.
+#
+# Why a custom job instead of a built-in: dist (astral-sh fork, 0.28.7) has no
+# built-in crates.io publisher (its publish-jobs are npm / homebrew only). A
+# custom job is the documented, reliable path and is exactly how astral-sh/uv
+# publishes its crates. We get a hard ordering guarantee by publishing the
+# library first, waiting for it to appear on the index, then the binary crate.
+#
+# SECRET REQUIRED: CARGO_REGISTRY_TOKEN must be added to the repository's
+# Actions secrets (Settings -> Secrets and variables -> Actions). It is read by
+# `cargo publish` via the CARGO_REGISTRY_TOKEN env var. Without it, this job
+# fails. `secrets: inherit` in release.yml forwards it from the repo.
+name: Publish to crates.io
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  publish-crates:
+    runs-on: ubuntu-22.04
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install Rust toolchain from rust-toolchain.toml
+        working-directory: cli
+        run: rustup show active-toolchain
+
+      # pds-core must be on crates.io before pds-cli, which declares
+      # `pds-core = { version = "0.1.0" }`. `cargo publish -p` resolves that
+      # dependency against the registry, so the library has to land first.
+      - name: Publish pds-core
+        working-directory: cli
+        run: cargo publish -p pds-core
+
+      # Wait for the freshly published pds-core to become available on the
+      # crates.io index before publishing the dependent binary crate. The index
+      # can lag a few seconds behind the publish API; poll until cargo can see
+      # the exact version.
+      - name: Wait for pds-core to appear on the index
+        working-directory: cli
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "pds-core") | .version')"
+          echo "waiting for pds-core ${version} on crates.io"
+          for attempt in $(seq 1 30); do
+            if cargo search pds-core --limit 1 | grep -q "^pds-core = \"${version}\""; then
+              echo "pds-core ${version} is available"
+              exit 0
+            fi
+            echo "attempt ${attempt}: not yet available, sleeping 10s"
+            sleep 10
+          done
+          echo "::error::pds-core ${version} did not appear on crates.io in time" >&2
+          exit 1
+
+      - name: Publish pds-cli
+        working-directory: cli
+        run: cargo publish -p pds-cli

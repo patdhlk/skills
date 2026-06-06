@@ -12,3 +12,8 @@ keywords = ["sphinx-needs", "requirements", "traceability", "cli"]
 
 [workspace.dependencies]
 pds-core = { path = "pds-core", version = "0.1.0" }
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

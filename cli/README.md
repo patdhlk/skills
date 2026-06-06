@@ -31,12 +31,23 @@ cargo install pds-cli
 
 The installed binary is named `pds`.
 
-### From GitHub Releases (first release pending)
+### From GitHub Releases (shell installer)
 
-Pre-built binaries for Linux x86_64, macOS x86_64, and macOS aarch64 will be
-attached to each [GitHub Release](https://github.com/patdhlk/skills/releases)
-once the first release is published. A one-line installer will be added at that
-point — check the release notes for the `install.sh` link.
+> **(first release pending)** — the install one-liner below works once the
+> first `v*` tag has been released; until then the download URL 404s.
+
+Each [GitHub Release](https://github.com/patdhlk/skills/releases) ships pre-built
+binaries for macOS (aarch64 and x86_64) and static-musl Linux (aarch64 and
+x86_64), with SHA-256 checksums. Install the latest with the generated shell
+installer:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/patdhlk/skills/releases/latest/download/pds-cli-installer.sh | sh
+```
+
+To pin a specific version, swap `latest` for the tag, e.g.
+`releases/download/v0.1.0/pds-cli-installer.sh`. The installer places the `pds`
+binary in your Cargo bin directory (`$CARGO_HOME/bin`, default `~/.cargo/bin`).
 
 ## Usage
 

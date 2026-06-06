@@ -79,3 +79,25 @@ fn version_flag_succeeds() {
 fn unknown_subcommand_exits_two() {
     pds().arg("frobnicate").assert().code(2);
 }
+
+/// Vertical slice: a project whose ubproject.toml has `builder = "make"` must cause
+/// `pds build` to exit 2 with `error.kind == "config"` and a message naming "make".
+#[test]
+fn bad_builder_value_surfaces_as_config_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = tmp.path().join("ubproject.toml");
+    std::fs::write(&config, "[tool.patdhlk-skills]\nbuilder = \"make\"\n").unwrap();
+
+    let assert = pds().arg("build").arg("--config").arg(&config).assert();
+    let out = assert.failure().code(2).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).expect("stdout is JSON");
+    assert_eq!(json["schema"], 1);
+    assert_eq!(json["verb"], "build");
+    assert_eq!(json["error"]["kind"], "config");
+    let msg = json["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("make"),
+        "error message should name the bad value \"make\", got: {msg}"
+    );
+}

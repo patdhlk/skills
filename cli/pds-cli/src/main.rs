@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use pds_core::{Error, Outcome, Project};
+use pds_core::{Config, Error, Outcome, Project};
 use serde_json::{Map, Value, json};
 
 #[derive(Parser)]
@@ -59,10 +59,11 @@ fn main() -> ExitCode {
     }
 }
 
-/// Resolve the project, then dispatch the verb. Verbs are honest placeholders
-/// until Tasks 3/4 wire in build/check logic.
+/// Resolve the project and load its config, then dispatch the verb.
+/// Verbs are honest placeholders until Tasks 3/4 wire in build/check logic.
 fn run(cli: &Cli) -> Result<Outcome, Error> {
-    let _project = resolve_project(cli)?;
+    let project = resolve_project(cli)?;
+    let _config = Config::load(&project)?;
     Err(Error::Tool {
         message: format!("not implemented: {}", cli.command.verb()),
     })

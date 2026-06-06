@@ -20,12 +20,12 @@
 //! so it can be tested without spawning a process.
 
 use std::path::Path;
-use std::process::Command;
 
 use serde_json::{Map, Value};
 
 use crate::builder::{
-    BuildCommand, needs_json_outdir, sphinx_needs_command, step_finding, ubc_build_command,
+    BuildCommand, ensure_output_dir, run_step, sphinx_needs_command, step_finding,
+    ubc_build_command,
 };
 use crate::config::{Builder, Config};
 use crate::error::Error;
@@ -132,44 +132,6 @@ pub fn run_check(config: &Config, project_root: &Path) -> Result<Outcome, Error>
         }
         Ok(Outcome::failed(payload))
     }
-}
-
-/// Create the directory the builders write into, if missing. Both builders land
-/// `needs.json` under `needs_json`'s parent (for sphinx, the same `outdir`).
-fn ensure_output_dir(config: &Config) -> Result<(), Error> {
-    let dir = needs_json_outdir(&config.needs_json);
-    create_dir(&dir)
-}
-
-fn create_dir(dir: &Path) -> Result<(), Error> {
-    std::fs::create_dir_all(dir).map_err(|e| Error::Tool {
-        message: format!("cannot create output directory {}: {e}", dir.display()),
-    })
-}
-
-/// Spawn one step, draining its stdout to pds's stderr, and await it. A
-/// non-spawnable program is an [`Error::Tool`] naming the program.
-fn run_step(cmd: &BuildCommand) -> Result<std::process::ExitStatus, Error> {
-    let mut child = Command::new(&cmd.program)
-        .args(&cmd.args)
-        .current_dir(&cmd.cwd)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit())
-        .spawn()
-        .map_err(|e| Error::Tool {
-            message: format!("cannot run {:?}: {e}", cmd.program),
-        })?;
-
-    // Drain child stdout into our stderr so it never reaches our stdout.
-    if let Some(mut out) = child.stdout.take() {
-        let mut err = std::io::stderr();
-        let _ = std::io::copy(&mut out, &mut err);
-    }
-
-    child.wait().map_err(|e| Error::Tool {
-        message: format!("{:?} could not be awaited: {e}", cmd.program),
-    })
 }
 
 #[cfg(test)]

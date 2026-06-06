@@ -91,6 +91,44 @@ pub fn sphinx_needs_command(config: &Config, project_root: &Path, gating: bool) 
     }
 }
 
+/// Create the directory that builders write into, if missing. Both builders
+/// land `needs.json` under `needs_json`'s parent (for sphinx the same outdir).
+pub(crate) fn ensure_output_dir(config: &Config) -> Result<(), Error> {
+    let dir = needs_json_outdir(&config.needs_json);
+    create_dir_all(&dir)
+}
+
+pub(crate) fn create_dir_all(dir: &Path) -> Result<(), Error> {
+    std::fs::create_dir_all(dir).map_err(|e| Error::Tool {
+        message: format!("cannot create output directory {}: {e}", dir.display()),
+    })
+}
+
+/// Spawn one step, drain its stdout to pds's stderr, and await it.
+/// A non-spawnable program is an [`Error::Tool`] naming the program.
+pub(crate) fn run_step(cmd: &BuildCommand) -> Result<std::process::ExitStatus, Error> {
+    let mut child = Command::new(&cmd.program)
+        .args(&cmd.args)
+        .current_dir(&cmd.cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .map_err(|e| Error::Tool {
+            message: format!("cannot run {:?}: {e}", cmd.program),
+        })?;
+
+    // Drain child stdout into our stderr so it never reaches our stdout.
+    if let Some(mut out) = child.stdout.take() {
+        let mut err = std::io::stderr();
+        let _ = std::io::copy(&mut out, &mut err);
+    }
+
+    child.wait().map_err(|e| Error::Tool {
+        message: format!("{:?} could not be awaited: {e}", cmd.program),
+    })
+}
+
 /// Run the configured builder and classify the result per the `pds build`
 /// contract.
 ///
@@ -108,37 +146,9 @@ pub fn run_build(config: &Config, project_root: &Path) -> Result<Outcome, Error>
     let cmd = build_command(config, project_root);
 
     // Ensure the output directory exists before the builder writes into it.
-    if let Some(parent) = config.needs_json.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| Error::Tool {
-            message: format!(
-                "cannot create needs.json output directory {}: {e}",
-                parent.display()
-            ),
-        })?;
-    }
+    ensure_output_dir(config)?;
 
-    // stderr is inherited (child stderr → pds stderr). stdout is piped and
-    // copied to pds's stderr so the child can never pollute pds's stdout.
-    let mut child = Command::new(&cmd.program)
-        .args(&cmd.args)
-        .current_dir(&cmd.cwd)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit())
-        .spawn()
-        .map_err(|e| Error::Tool {
-            message: format!("cannot run builder {:?}: {e}", cmd.program),
-        })?;
-
-    // Drain child stdout into our stderr so it never reaches our stdout.
-    if let Some(mut out) = child.stdout.take() {
-        let mut err = std::io::stderr();
-        let _ = std::io::copy(&mut out, &mut err);
-    }
-
-    let status = child.wait().map_err(|e| Error::Tool {
-        message: format!("builder {:?} could not be awaited: {e}", cmd.program),
-    })?;
+    let status = run_step(&cmd)?;
 
     if !status.success() {
         return Ok(Outcome::failed(build_failure_payload(
@@ -174,13 +184,18 @@ fn build_failure_payload(program: &str, status: &std::process::ExitStatus) -> Ma
     payload
 }
 
-/// One finding for a failed step named `check`, run via `program`, exiting with
-/// `status`. The message names the exit code, or the terminating signal number
-/// where the OS reports one (e.g. a child killed by SIGKILL), with a bare
-/// `"signal"` fallback when neither is available.
-pub(crate) fn step_finding(check: &str, program: &str, status: &std::process::ExitStatus) -> Value {
+/// One finding for a failed step named `step_name`, run via `program`, exiting
+/// with `status`. The message names the exit code, or the terminating signal
+/// number where the OS reports one (e.g. a child killed by SIGKILL), with a
+/// bare `"signal"` fallback when neither is available. The JSON key is
+/// `"check"` to match the output schema.
+pub(crate) fn step_finding(
+    step_name: &str,
+    program: &str,
+    status: &std::process::ExitStatus,
+) -> Value {
     json!({
-        "check": check,
+        "check": step_name,
         "severity": "error",
         "need": Value::Null,
         "message": failure_message(program, status),

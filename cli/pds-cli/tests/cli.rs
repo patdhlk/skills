@@ -277,12 +277,19 @@ fn ubc_project(body: &str) -> (tempfile::TempDir, std::path::PathBuf, String) {
 }
 
 /// A fake `ubc` whose `build needs --outpath <path>` writes a needs.json and
-/// exits 0, and whose `check` subcommand exits 0. Chatters on both streams.
+/// exits 0, and whose `check <spec_dir>` subcommand exits 0. Chatters on both
+/// streams. The `check` branch asserts that a positional spec_dir argument is
+/// present (i.e. `$2` is non-empty); if it is missing the fake exits 2 to
+/// surface the bare-`ubc-check` bug.
 #[cfg(unix)]
 const FAKE_UBC_OK: &str = r#"#!/bin/sh
 echo "fake-ubc running: $1" >&2
 echo "ubc chatty stdout"
 if [ "$1" = "check" ]; then
+  if [ -z "$2" ]; then
+    echo "fake-ubc: check requires a spec_dir argument" >&2
+    exit 2
+  fi
   exit 0
 fi
 # build needs --outpath <path>

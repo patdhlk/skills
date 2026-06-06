@@ -4,8 +4,8 @@
 //! strict, fail-closed diagnostics. How those obligations map to child
 //! processes depends on the builder:
 //!
-//! - [`Builder::Ubc`] → **two** steps in order: (1) `ubc check`, then (2)
-//!   `ubc build needs --outpath <needs_json>`. If `ubc check` fails, step 2 is
+//! - [`Builder::Ubc`] → **two** steps in order: (1) `ubc check <spec_dir>`, then (2)
+//!   `ubc build needs --outpath <needs_json>`. If `ubc check <spec_dir>` fails, step 2 is
 //!   *still* attempted — a stale `needs.json` is worse than none — and both
 //!   failures are reported. Each failed step contributes exactly one finding.
 //! - [`Builder::SphinxBuild`] → **one** step: `<sphinx_command...> -W -b needs
@@ -44,7 +44,7 @@ pub struct CheckStep {
 /// Construct the ordered list of check steps for `config`, run from
 /// `project_root`.
 ///
-/// - [`Builder::Ubc`] → `[ubc check, ubc build needs --outpath <needs_json>]`.
+/// - [`Builder::Ubc`] → `[ubc check <spec_dir>, ubc build needs --outpath <needs_json>]`.
 /// - [`Builder::SphinxBuild`] → `[<sphinx...> -W -b needs <spec_dir> <outdir>]`.
 pub fn check_commands(config: &Config, project_root: &Path) -> Vec<CheckStep> {
     match config.builder {
@@ -53,7 +53,10 @@ pub fn check_commands(config: &Config, project_root: &Path) -> Vec<CheckStep> {
                 name: "ubc-check".to_string(),
                 command: BuildCommand {
                     program: "ubc".to_string(),
-                    args: vec!["check".to_string()],
+                    args: vec![
+                        "check".to_string(),
+                        config.spec_dir.to_string_lossy().into_owned(),
+                    ],
                     cwd: project_root.to_path_buf(),
                 },
             },
@@ -168,10 +171,10 @@ mod tests {
         let steps = check_commands(&cfg, Path::new("/proj"));
         assert_eq!(steps.len(), 2);
 
-        // Step 1: ubc check.
+        // Step 1: ubc check <spec_dir>.
         assert_eq!(steps[0].name, "ubc-check");
         assert_eq!(steps[0].command.program, "ubc");
-        assert_eq!(steps[0].command.args, vec!["check"]);
+        assert_eq!(steps[0].command.args, vec!["check", "/proj/spec"]);
         assert_eq!(steps[0].command.cwd, PathBuf::from("/proj"));
 
         // Step 2: ubc build needs --outpath <needs_json>.

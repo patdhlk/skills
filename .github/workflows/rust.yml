@@ -1,0 +1,50 @@
+# Rust CI gate for the pds workspace (cli/): fmt, clippy (-D warnings), and
+# tests must all pass. Runs only when cli/** or this file changes.
+name: rust
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cli/**"
+      - ".github/workflows/rust.yml"
+  pull_request:
+    paths:
+      - "cli/**"
+      - ".github/workflows/rust.yml"
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The pin lives in cli/rust-toolchain.toml ([toolchain] channel =
+      # "1.96.0"). GitHub runners ship rustup >= 1.25, which auto-installs
+      # the channel named by the nearest rust-toolchain.toml on first use,
+      # so `rustup show active-toolchain` from cli/ provisions exactly that
+      # release. The toolchain file pins only the channel (no components),
+      # so rustfmt and clippy are added explicitly to that same toolchain.
+      - name: Install Rust toolchain from rust-toolchain.toml
+        working-directory: cli
+        run: |
+          rustup show active-toolchain
+          rustup component add rustfmt clippy
+
+      # Cache ~/.cargo registry + git db + cli/target in one step.
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+
+      - name: Check formatting
+        working-directory: cli
+        run: cargo fmt --all --check
+
+      - name: Clippy (deny warnings)
+        working-directory: cli
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run tests
+        working-directory: cli
+        run: cargo test --all

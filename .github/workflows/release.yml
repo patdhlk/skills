@@ -80,6 +80,10 @@ jobs:
     runs-on: "ubuntu-22.04"
     outputs:
       val: ${{ steps.plan.outputs.manifest }}
+      # NOTE (hand-edit): pull_request trigger was removed from `on:` above, so
+      # github.event.pull_request is always falsy here. The ternaries below are
+      # dist-generated dead code that always resolves to the tag-mode branch.
+      # Do NOT restructure them — dist generate will re-emit this exact form.
       tag: ${{ !github.event.pull_request && github.ref_name || '' }}
       tag-flag: ${{ !github.event.pull_request && format('--tag={0}', github.ref_name) || '' }}
       publishing: ${{ !github.event.pull_request }}

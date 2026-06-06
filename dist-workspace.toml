@@ -1,4 +1,4 @@
-# dist (cargo-dist, astral-sh fork) release pipeline configuration.
+# dist (cargo-dist, axodotdev upstream) release pipeline configuration.
 #
 # The Cargo workspace lives in cli/, not at the repo root, so dist's workspace
 # member uses the `cargo:<relative-path>` form to point at it. dist generates
@@ -10,7 +10,7 @@ members = ["cargo:cli/"]
 # Config for 'dist'
 [dist]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
-cargo-dist-version = "0.28.7"
+cargo-dist-version = "0.32.0"
 # CI backends to support
 ci = "github"
 # The installers to generate for each app

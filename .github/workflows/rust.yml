@@ -19,15 +19,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Pin is honoured by reading cli/rust-toolchain.toml directly: the
-      # `toolchain-file` input passes the path to dtolnay/rust-toolchain,
-      # which parses the [toolchain] channel value (1.96.0) and installs
-      # exactly that release with rustfmt + clippy components included.
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@v1
-        with:
-          toolchain-file: cli/rust-toolchain.toml
-          components: rustfmt, clippy
+      # The pin lives in cli/rust-toolchain.toml ([toolchain] channel =
+      # "1.96.0"). GitHub runners ship rustup >= 1.25, which auto-installs
+      # the channel named by the nearest rust-toolchain.toml on first use,
+      # so `rustup show active-toolchain` from cli/ provisions exactly that
+      # release. The toolchain file pins only the channel (no components),
+      # so rustfmt and clippy are added explicitly to that same toolchain.
+      - name: Install Rust toolchain from rust-toolchain.toml
+        working-directory: cli
+        run: |
+          rustup show active-toolchain
+          rustup component add rustfmt clippy
 
       # Cache ~/.cargo registry + git db + cli/target in one step.
       - name: Cache Rust build artifacts

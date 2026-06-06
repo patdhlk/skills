@@ -277,7 +277,7 @@ The dogfooded backlog (:need:`ADR_0012`): every v1 skill port is an
 
 .. issue:: Scaffold the pds-cli crate and release pipeline
    :id: ISSUE_0019
-   :status: in-progress
+   :status: done
    :kind: feature
    :links: ADR_0018, ADR_0019, ADR_0020
 

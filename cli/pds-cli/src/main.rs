@@ -1,0 +1,94 @@
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use clap::{Parser, Subcommand};
+use pds_core::{Error, Project};
+use serde_json::{Value, json};
+
+#[derive(Parser)]
+#[command(
+    name = "pds",
+    version,
+    about = "Gate-and-query CLI for sphinx-needs repos"
+)]
+struct Cli {
+    /// Use this ubproject.toml instead of discovering one from the cwd.
+    #[arg(long, global = true, value_name = "PATH")]
+    config: Option<PathBuf>,
+
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Build the needs corpus.
+    Build,
+    /// Check the corpus for violations.
+    Check,
+}
+
+impl Commands {
+    fn verb(&self) -> &'static str {
+        match self {
+            Commands::Build => "build",
+            Commands::Check => "check",
+        }
+    }
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    let verb = cli.command.verb();
+    match run(&cli) {
+        Ok(value) => {
+            emit_success(verb, value);
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            emit_error(verb, &err);
+            ExitCode::from(err.exit_code() as u8)
+        }
+    }
+}
+
+/// Resolve the project, then dispatch the verb. Verbs are honest placeholders
+/// until Tasks 3/4 wire in build/check logic.
+fn run(cli: &Cli) -> Result<Value, Error> {
+    let _project = resolve_project(cli)?;
+    Err(Error::Tool {
+        message: format!("not implemented: {}", cli.command.verb()),
+    })
+}
+
+fn resolve_project(cli: &Cli) -> Result<Project, Error> {
+    match &cli.config {
+        Some(path) => Project::from_config_path(path),
+        None => {
+            let cwd = std::env::current_dir().map_err(|e| Error::Config {
+                message: format!("cannot read current directory: {e}"),
+            })?;
+            Project::discover(&cwd)
+        }
+    }
+}
+
+/// Print the single success JSON object on stdout.
+fn emit_success(verb: &str, value: Value) {
+    let mut obj = json!({ "schema": 1, "verb": verb });
+    if let (Some(map), Value::Object(extra)) = (obj.as_object_mut(), value) {
+        map.extend(extra);
+    }
+    println!("{obj}");
+}
+
+/// Print the JSON error envelope on stdout and a human line on stderr.
+fn emit_error(verb: &str, err: &Error) {
+    let obj = json!({
+        "schema": 1,
+        "verb": verb,
+        "error": { "kind": err.kind(), "message": err.to_string() },
+    });
+    println!("{obj}");
+    eprintln!("pds {verb}: {err}");
+}

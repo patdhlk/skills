@@ -6,10 +6,10 @@
 # AFTER the `host` job has created the GitHub Release, passing the dist plan as
 # a JSON string and inheriting secrets.
 #
-# Why a custom job instead of a built-in: dist (astral-sh fork, 0.28.7) has no
+# Why a custom job instead of a built-in: dist (axodotdev, 0.32.0) has no
 # built-in crates.io publisher (its publish-jobs are npm / homebrew only). A
-# custom job is the documented, reliable path and is exactly how astral-sh/uv
-# publishes its crates. We get a hard ordering guarantee by publishing the
+# custom job is dist's documented path for extra publish steps. We get a hard
+# ordering guarantee by publishing the
 # library first, waiting for it to appear on the index, then the binary crate.
 #
 # SECRET REQUIRED: CARGO_REGISTRY_TOKEN must be added to the repository's

@@ -60,16 +60,14 @@ fn main() -> ExitCode {
 }
 
 /// Resolve the project and load its config, then dispatch the verb.
-/// `build` runs the real builder adapter; `check` is an honest placeholder
-/// until Task 4 wires in the strict gate.
+/// `build` runs the real builder adapter; `check` runs the strict gate
+/// (fresh needs.json plus fail-closed diagnostics).
 fn run(cli: &Cli) -> Result<Outcome, Error> {
     let project = resolve_project(cli)?;
     let config = Config::load(&project)?;
     match cli.command {
         Commands::Build => pds_core::run_build(&config, &project.root),
-        Commands::Check => Err(Error::Tool {
-            message: format!("not implemented: {}", cli.command.verb()),
-        }),
+        Commands::Check => pds_core::run_check(&config, &project.root),
     }
 }
 

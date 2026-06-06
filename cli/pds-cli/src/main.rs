@@ -60,13 +60,17 @@ fn main() -> ExitCode {
 }
 
 /// Resolve the project and load its config, then dispatch the verb.
-/// Verbs are honest placeholders until Tasks 3/4 wire in build/check logic.
+/// `build` runs the real builder adapter; `check` is an honest placeholder
+/// until Task 4 wires in the strict gate.
 fn run(cli: &Cli) -> Result<Outcome, Error> {
     let project = resolve_project(cli)?;
-    let _config = Config::load(&project)?;
-    Err(Error::Tool {
-        message: format!("not implemented: {}", cli.command.verb()),
-    })
+    let config = Config::load(&project)?;
+    match cli.command {
+        Commands::Build => pds_core::run_build(&config, &project.root),
+        Commands::Check => Err(Error::Tool {
+            message: format!("not implemented: {}", cli.command.verb()),
+        }),
+    }
 }
 
 fn resolve_project(cli: &Cli) -> Result<Project, Error> {

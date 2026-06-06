@@ -129,6 +129,8 @@ Releases are tag-driven. The full runbook is one commit plus one tag push:
 
    ```sh
    git push origin main        # the version-bump commit
+   # wait for the rust + spec CI checks on that commit to go green —
+   # release.yml re-checks versions but does NOT re-run clippy/tests
    git tag v<version>          # e.g. git tag v0.2.0
    git push origin v<version>  # this push triggers the release
    ```

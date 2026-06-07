@@ -258,6 +258,8 @@ mod tests {
                 "run".to_string(),
                 "sphinx-build".to_string(),
             ],
+            exempt_statuses: vec!["done".to_string(), "wontfix".to_string()],
+            lint: None,
         }
     }
 

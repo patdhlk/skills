@@ -38,6 +38,74 @@ pub enum IssueBackend {
 // Public Config type
 // ---------------------------------------------------------------------------
 
+/// Validated per-directive body-length bounds parsed from `[tool.patdhlk-skills.lint]`.
+///
+/// Both `min` (from `nontrivial_body`) and `max` (from `max_body_length`) are optional
+/// independently; the directive key must appear in `[[needs.types]]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LintBodyLength {
+    /// Minimum body length in characters (> 0).
+    pub min: Option<usize>,
+    /// Maximum body length in characters (> 0).
+    pub max: Option<usize>,
+}
+
+/// Validated weasel-word rule from `[tool.patdhlk-skills.lint]`.
+///
+/// Present only when the `weasel_words` key is in the lint table.
+/// Both fields are guaranteed non-empty (each `String` is also non-empty).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LintWeaselWords {
+    /// Words that trigger the check (non-empty; each element non-empty).
+    pub words: Vec<String>,
+    /// Directive names the check applies to (non-empty; each element non-empty).
+    pub directives: Vec<String>,
+}
+
+/// Validated unenumerated-quantifier rule from `[tool.patdhlk-skills.lint]`.
+///
+/// Present only when the `unenumerated_quantifiers` key is in the lint table.
+/// Both fields are guaranteed non-empty (each `String` is also non-empty).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LintUnenumeratedQuantifiers {
+    /// Quantifier strings that trigger the check (non-empty; each element non-empty).
+    pub quantifiers: Vec<String>,
+    /// Directive names the check applies to (non-empty; each element non-empty).
+    pub directives: Vec<String>,
+}
+
+/// Validated lint configuration from `[tool.patdhlk-skills.lint]`.
+///
+/// `None` on any field means that rule is disabled.  The table may be present
+/// with all keys absent — that is valid and means lint runs but all rules are
+/// off (no findings).
+///
+/// Every directive name referenced by any rule is guaranteed to appear in the
+/// declared `[[needs.types]]`; a violation is a `Error::Config` (exit 2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LintConfig {
+    /// Per-directive required section lead-ins.
+    ///
+    /// Key: directive name. Value: list of bold-text lead-ins that must appear
+    /// in the body (e.g. `["Context", "Decision", "Consequences"]` for
+    /// `arch-decision`). Both the map and every inner `Vec` are guaranteed
+    /// non-empty (all directive names are in `[[needs.types]]`).
+    pub required_sections: Option<HashMap<String, Vec<String>>>,
+
+    /// Per-directive body-length bounds.
+    ///
+    /// Key: directive name. Value: min/max pair (at least one is `Some`).
+    /// The map is non-empty when `Some`. All directive names are in
+    /// `[[needs.types]]`.
+    pub body_length: Option<HashMap<String, LintBodyLength>>,
+
+    /// Weasel-word rule.
+    pub weasel_words: Option<LintWeaselWords>,
+
+    /// Unenumerated-quantifier rule.
+    pub unenumerated_quantifiers: Option<LintUnenumeratedQuantifiers>,
+}
+
 /// Resolved, validated configuration loaded from `ubproject.toml`.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -55,6 +123,15 @@ pub struct Config {
     pub needs_json: PathBuf,
     /// Command used to invoke Sphinx (non-empty).
     pub sphinx_command: Vec<String>,
+    /// Statuses whose needs are exempt from all corpus checks (lint, verdict-check, …).
+    ///
+    /// Defaults to `["done", "wontfix"]` when the key is absent from
+    /// `[tool.patdhlk-skills.gate]`.  An explicitly empty list is legal and
+    /// means nothing is exempt.  Shared plumbing so every future
+    /// check verb reads the same policy (ISSUE_0018 mechanism).
+    pub exempt_statuses: Vec<String>,
+    /// Lint rule configuration (`None` when `[tool.patdhlk-skills.lint]` is absent).
+    pub lint: Option<LintConfig>,
 }
 
 impl Config {
@@ -91,6 +168,7 @@ impl Config {
             issue_doc: raw_issue_doc,
             roles: raw_roles,
             gate: raw_gate,
+            lint: raw_lint,
         } = doc.tool.and_then(|t| t.patdhlk_skills).unwrap_or_default();
 
         // spec_dir: tool > project.srcdir > "spec"
@@ -157,10 +235,10 @@ impl Config {
             }
         }
 
-        // Destructure gate once so both fields can be moved independently.
-        let (gate_needs_json, gate_sphinx_command) = match raw_gate {
-            Some(g) => (g.needs_json, g.sphinx_command),
-            None => (None, None),
+        // Destructure gate once so all fields can be moved independently.
+        let (gate_needs_json, gate_sphinx_command, gate_exempt_statuses) = match raw_gate {
+            Some(g) => (g.needs_json, g.sphinx_command, g.exempt_statuses),
+            None => (None, None, None),
         };
 
         // gate.needs_json: from table or default <spec_dir>/_build/needs/needs.json
@@ -194,6 +272,15 @@ impl Config {
             }
         };
 
+        // gate.exempt_statuses: default to ["done", "wontfix"] when absent.
+        let exempt_statuses =
+            gate_exempt_statuses.unwrap_or_else(|| vec!["done".to_string(), "wontfix".to_string()]);
+
+        // lint table
+        let lint = raw_lint
+            .map(|raw| validate_lint(raw, &declared_directives))
+            .transpose()?;
+
         Ok(Config {
             spec_dir,
             builder,
@@ -202,6 +289,8 @@ impl Config {
             roles,
             needs_json,
             sphinx_command,
+            exempt_statuses,
+            lint,
         })
     }
 }
@@ -248,12 +337,328 @@ struct RawPatdhlkSkills {
     issue_doc: Option<String>,
     roles: Option<HashMap<String, String>>,
     gate: Option<RawGate>,
+    lint: Option<RawLintConfig>,
 }
 
 #[derive(Deserialize)]
 struct RawGate {
     needs_json: Option<String>,
     sphinx_command: Option<Vec<String>>,
+    /// Statuses exempt from all corpus checks; absent → default `["done", "wontfix"]`.
+    exempt_statuses: Option<Vec<String>>,
+}
+
+/// Raw `[tool.patdhlk-skills.lint]` — all rule keys optional; unknown keys ignored.
+#[derive(Deserialize, Default)]
+struct RawLintConfig {
+    /// `required_sections`: map directive → list of required section lead-ins.
+    required_sections: Option<HashMap<String, Vec<String>>>,
+    /// `nontrivial_body`: map directive → minimum body length (integer chars).
+    nontrivial_body: Option<HashMap<String, i64>>,
+    /// `max_body_length`: map directive → maximum body length (integer chars).
+    max_body_length: Option<HashMap<String, i64>>,
+    /// `weasel_words`: `{ words = [...], directives = [...] }`.
+    weasel_words: Option<RawWordListRule>,
+    /// `unenumerated_quantifiers`: `{ quantifiers = [...], directives = [...] }`.
+    unenumerated_quantifiers: Option<RawQuantifierRule>,
+}
+
+/// Shared raw type for word-list + directive-list rules.
+#[derive(Deserialize)]
+struct RawWordListRule {
+    words: Vec<String>,
+    directives: Vec<String>,
+}
+
+/// Shared raw type for quantifier-list + directive-list rules.
+#[derive(Deserialize)]
+struct RawQuantifierRule {
+    quantifiers: Vec<String>,
+    directives: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Lint validation
+// ---------------------------------------------------------------------------
+
+/// Validate a raw lint table into a [`LintConfig`].
+///
+/// All directive names referenced in any rule are checked against
+/// `declared_directives`; any undeclared name is a [`Error::Config`] (exit 2).
+fn validate_lint(
+    raw: RawLintConfig,
+    declared_directives: &HashSet<String>,
+) -> Result<LintConfig, Error> {
+    // ---- required_sections ------------------------------------------------
+    let required_sections = raw
+        .required_sections
+        .map(|map| validate_required_sections(map, declared_directives))
+        .transpose()?;
+
+    // ---- nontrivial_body + max_body_length ---------------------------------
+    // Merge the two per-directive maps into a single `body_length` map.
+    let body_length = validate_body_length(
+        raw.nontrivial_body,
+        raw.max_body_length,
+        declared_directives,
+    )?;
+
+    // ---- weasel_words ------------------------------------------------------
+    let weasel_words = raw
+        .weasel_words
+        .map(|r| validate_word_list_rule(r, declared_directives, "weasel_words"))
+        .transpose()?;
+
+    // ---- unenumerated_quantifiers ------------------------------------------
+    let unenumerated_quantifiers = raw
+        .unenumerated_quantifiers
+        .map(|r| validate_quantifier_rule(r, declared_directives))
+        .transpose()?;
+
+    Ok(LintConfig {
+        required_sections,
+        body_length,
+        weasel_words,
+        unenumerated_quantifiers,
+    })
+}
+
+/// Validate `required_sections` map entries.
+///
+/// Every directive key must be in `declared_directives`; every inner `Vec`
+/// must be non-empty (empty section list makes the key meaningless).
+fn validate_required_sections(
+    map: HashMap<String, Vec<String>>,
+    declared_directives: &HashSet<String>,
+) -> Result<HashMap<String, Vec<String>>, Error> {
+    let mut drift: Vec<String> = map
+        .keys()
+        .filter(|d| !declared_directives.contains(*d))
+        .cloned()
+        .collect();
+    if !drift.is_empty() {
+        drift.sort();
+        return Err(Error::Config {
+            message: format!(
+                "lint.required_sections references undeclared [[needs.types]] \
+                 directives: {}",
+                drift.join(", ")
+            ),
+        });
+    }
+    // Inner vecs may not be empty (an empty section list is nonsensical).
+    for (directive, sections) in &map {
+        if sections.is_empty() {
+            return Err(Error::Config {
+                message: format!(
+                    "lint.required_sections[{directive:?}]: section list must not be empty"
+                ),
+            });
+        }
+    }
+    Ok(map)
+}
+
+/// Merge `nontrivial_body` (min) and `max_body_length` (max) into a single
+/// per-directive [`LintBodyLength`] map, validating along the way.
+///
+/// Rules:
+/// - Each length value must be > 0.
+/// - Each directive key must be in `declared_directives`.
+/// - A directive may appear in one or both maps.
+/// - The result is `None` when both input maps are absent.
+fn validate_body_length(
+    min_map: Option<HashMap<String, i64>>,
+    max_map: Option<HashMap<String, i64>>,
+    declared_directives: &HashSet<String>,
+) -> Result<Option<HashMap<String, LintBodyLength>>, Error> {
+    if min_map.is_none() && max_map.is_none() {
+        return Ok(None);
+    }
+
+    // Collect all directive keys from both maps for drift check.
+    let mut all_directives: HashSet<String> = HashSet::new();
+    if let Some(ref m) = min_map {
+        all_directives.extend(m.keys().cloned());
+    }
+    if let Some(ref m) = max_map {
+        all_directives.extend(m.keys().cloned());
+    }
+
+    let mut drift: Vec<String> = all_directives
+        .iter()
+        .filter(|d| !declared_directives.contains(*d))
+        .cloned()
+        .collect();
+    if !drift.is_empty() {
+        drift.sort();
+        return Err(Error::Config {
+            message: format!(
+                "lint body-length rules reference undeclared [[needs.types]] \
+                 directives: {}",
+                drift.join(", ")
+            ),
+        });
+    }
+
+    // Validate individual values.
+    if let Some(ref m) = min_map {
+        for (directive, &val) in m {
+            if val <= 0 {
+                return Err(Error::Config {
+                    message: format!(
+                        "lint.nontrivial_body[{directive:?}]: minimum body length \
+                         must be > 0, got {val}"
+                    ),
+                });
+            }
+        }
+    }
+    if let Some(ref m) = max_map {
+        for (directive, &val) in m {
+            if val <= 0 {
+                return Err(Error::Config {
+                    message: format!(
+                        "lint.max_body_length[{directive:?}]: maximum body length \
+                         must be > 0, got {val}"
+                    ),
+                });
+            }
+        }
+    }
+
+    // Build the merged map.
+    let mut merged: HashMap<String, LintBodyLength> = HashMap::new();
+    for directive in all_directives {
+        let min = min_map
+            .as_ref()
+            .and_then(|m| m.get(&directive))
+            .map(|&v| v as usize);
+        let max = max_map
+            .as_ref()
+            .and_then(|m| m.get(&directive))
+            .map(|&v| v as usize);
+        merged.insert(directive, LintBodyLength { min, max });
+    }
+
+    Ok(Some(merged))
+}
+
+/// Validate a `weasel_words = { words = [...], directives = [...] }` rule.
+///
+/// Both lists must be non-empty and contain no empty strings.  All directive
+/// names must appear in `declared_directives`.
+fn validate_word_list_rule(
+    raw: RawWordListRule,
+    declared_directives: &HashSet<String>,
+    key: &str,
+) -> Result<LintWeaselWords, Error> {
+    // words list
+    if raw.words.is_empty() {
+        return Err(Error::Config {
+            message: format!("lint.{key}.words must not be empty"),
+        });
+    }
+    if let Some(pos) = raw.words.iter().position(|w| w.is_empty()) {
+        return Err(Error::Config {
+            message: format!(
+                "lint.{key}.words[{pos}] is an empty string; all words must be non-empty"
+            ),
+        });
+    }
+    // directives list
+    if raw.directives.is_empty() {
+        return Err(Error::Config {
+            message: format!("lint.{key}.directives must not be empty"),
+        });
+    }
+    if let Some(pos) = raw.directives.iter().position(|d| d.is_empty()) {
+        return Err(Error::Config {
+            message: format!(
+                "lint.{key}.directives[{pos}] is an empty string; all directives must be non-empty"
+            ),
+        });
+    }
+    // drift check
+    let mut drift: Vec<String> = raw
+        .directives
+        .iter()
+        .filter(|d| !declared_directives.contains(*d))
+        .cloned()
+        .collect();
+    if !drift.is_empty() {
+        drift.sort();
+        return Err(Error::Config {
+            message: format!(
+                "lint.{key}.directives references undeclared [[needs.types]] \
+                 directives: {}",
+                drift.join(", ")
+            ),
+        });
+    }
+    Ok(LintWeaselWords {
+        words: raw.words,
+        directives: raw.directives,
+    })
+}
+
+/// Validate an `unenumerated_quantifiers = { quantifiers = [...], directives = [...] }` rule.
+///
+/// Both lists must be non-empty and contain no empty strings.  All directive
+/// names must appear in `declared_directives`.
+fn validate_quantifier_rule(
+    raw: RawQuantifierRule,
+    declared_directives: &HashSet<String>,
+) -> Result<LintUnenumeratedQuantifiers, Error> {
+    // quantifiers list
+    if raw.quantifiers.is_empty() {
+        return Err(Error::Config {
+            message: "lint.unenumerated_quantifiers.quantifiers must not be empty".to_string(),
+        });
+    }
+    if let Some(pos) = raw.quantifiers.iter().position(|q| q.is_empty()) {
+        return Err(Error::Config {
+            message: format!(
+                "lint.unenumerated_quantifiers.quantifiers[{pos}] is an empty string; \
+                 all quantifiers must be non-empty"
+            ),
+        });
+    }
+    // directives list
+    if raw.directives.is_empty() {
+        return Err(Error::Config {
+            message: "lint.unenumerated_quantifiers.directives must not be empty".to_string(),
+        });
+    }
+    if let Some(pos) = raw.directives.iter().position(|d| d.is_empty()) {
+        return Err(Error::Config {
+            message: format!(
+                "lint.unenumerated_quantifiers.directives[{pos}] is an empty string; \
+                 all directives must be non-empty"
+            ),
+        });
+    }
+    // drift check
+    let mut drift: Vec<String> = raw
+        .directives
+        .iter()
+        .filter(|d| !declared_directives.contains(*d))
+        .cloned()
+        .collect();
+    if !drift.is_empty() {
+        drift.sort();
+        return Err(Error::Config {
+            message: format!(
+                "lint.unenumerated_quantifiers.directives references undeclared \
+                 [[needs.types]] directives: {}",
+                drift.join(", ")
+            ),
+        });
+    }
+    Ok(LintUnenumeratedQuantifiers {
+        quantifiers: raw.quantifiers,
+        directives: raw.directives,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -846,5 +1251,585 @@ feature = "feat"
         let (_tmp, project) = make_project(toml);
         let result = Config::load(&project);
         assert!(result.is_ok());
+    }
+
+    // ------------------------------------------------------------------
+    // exempt_statuses on gate
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn absent_gate_table_gives_default_exempt_statuses() {
+        let toml = "[project]\nname = \"x\"";
+        let (_tmp, project) = make_project(toml);
+        let cfg = Config::load(&project).unwrap();
+        assert_eq!(
+            cfg.exempt_statuses,
+            vec!["done".to_string(), "wontfix".to_string()],
+            "default exempt_statuses must be [done, wontfix]"
+        );
+    }
+
+    #[test]
+    fn gate_table_without_exempt_statuses_gives_default() {
+        let toml = r#"
+[tool.patdhlk-skills.gate]
+needs_json = "spec/_build/needs/needs.json"
+"#;
+        let (_tmp, project) = make_project(toml);
+        let cfg = Config::load(&project).unwrap();
+        assert_eq!(
+            cfg.exempt_statuses,
+            vec!["done".to_string(), "wontfix".to_string()]
+        );
+    }
+
+    #[test]
+    fn explicit_exempt_statuses_overrides_default() {
+        let toml = r#"
+[tool.patdhlk-skills.gate]
+exempt_statuses = ["archived", "superseded"]
+"#;
+        let (_tmp, project) = make_project(toml);
+        let cfg = Config::load(&project).unwrap();
+        assert_eq!(
+            cfg.exempt_statuses,
+            vec!["archived".to_string(), "superseded".to_string()]
+        );
+    }
+
+    #[test]
+    fn empty_exempt_statuses_is_legal() {
+        // Explicit empty list = nothing is exempt.
+        let toml = r#"
+[tool.patdhlk-skills.gate]
+exempt_statuses = []
+"#;
+        let (_tmp, project) = make_project(toml);
+        let cfg = Config::load(&project).unwrap();
+        assert!(
+            cfg.exempt_statuses.is_empty(),
+            "explicit empty exempt_statuses must be respected"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // lint table: absent → None
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn absent_lint_table_yields_none() {
+        let toml = "[project]\nname = \"x\"";
+        let (_tmp, project) = make_project(toml);
+        let cfg = Config::load(&project).unwrap();
+        assert!(cfg.lint.is_none(), "absent lint table must yield None");
+    }
+
+    // ------------------------------------------------------------------
+    // lint table: all rule keys absent → valid LintConfig with all None
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn empty_lint_table_is_valid_with_all_rules_none() {
+        let toml = r#"
+[tool.patdhlk-skills.lint]
+"#;
+        let (_tmp, project) = make_project(toml);
+        let cfg = Config::load(&project).unwrap();
+        let lint = cfg.lint.expect("lint table present → Some(LintConfig)");
+        assert!(lint.required_sections.is_none());
+        assert!(lint.body_length.is_none());
+        assert!(lint.weasel_words.is_none());
+        assert!(lint.unenumerated_quantifiers.is_none());
+    }
+
+    // ------------------------------------------------------------------
+    // lint table: unknown keys are ignored (forward compat)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn unknown_lint_keys_are_ignored() {
+        let toml = r#"
+[tool.patdhlk-skills.lint]
+future_rule = "something"
+another_future = 42
+"#;
+        let (_tmp, project) = make_project(toml);
+        let result = Config::load(&project);
+        assert!(
+            result.is_ok(),
+            "unknown lint keys should be ignored, got: {:?}",
+            result
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // lint table: full parse with all four rules + max_body_length
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn full_lint_table_parses_all_rules() {
+        let toml = r#"
+[[needs.types]]
+directive = "issue"
+
+[[needs.types]]
+directive = "arch-decision"
+
+[[needs.types]]
+directive = "req"
+
+[tool.patdhlk-skills.lint.required_sections]
+arch-decision = ["Context", "Decision", "Consequences"]
+
+[tool.patdhlk-skills.lint.nontrivial_body]
+issue = 50
+
+[tool.patdhlk-skills.lint.max_body_length]
+issue = 2000
+
+[tool.patdhlk-skills.lint.weasel_words]
+words = ["significant", "appropriate", "robust"]
+directives = ["req"]
+
+[tool.patdhlk-skills.lint.unenumerated_quantifiers]
+quantifiers = ["all", "every", "each"]
+directives = ["req"]
+"#;
+        let (_tmp, project) = make_project(toml);
+        let cfg = Config::load(&project).unwrap();
+        let lint = cfg.lint.expect("lint must be Some");
+
+        // required_sections
+        let rs = lint
+            .required_sections
+            .expect("required_sections must be Some");
+        let ad_sections = rs.get("arch-decision").expect("arch-decision key present");
+        assert_eq!(
+            ad_sections,
+            &vec![
+                "Context".to_string(),
+                "Decision".to_string(),
+                "Consequences".to_string()
+            ]
+        );
+
+        // body_length: min only on issue
+        let bl = lint.body_length.expect("body_length must be Some");
+        let issue_bl = bl.get("issue").expect("issue key present");
+        assert_eq!(issue_bl.min, Some(50));
+        assert_eq!(issue_bl.max, Some(2000));
+
+        // weasel_words
+        let ww = lint.weasel_words.expect("weasel_words must be Some");
+        assert_eq!(
+            ww.words,
+            vec![
+                "significant".to_string(),
+                "appropriate".to_string(),
+                "robust".to_string()
+            ]
+        );
+        assert_eq!(ww.directives, vec!["req".to_string()]);
+
+        // unenumerated_quantifiers
+        let uq = lint
+            .unenumerated_quantifiers
+            .expect("unenumerated_quantifiers must be Some");
+        assert_eq!(
+            uq.quantifiers,
+            vec!["all".to_string(), "every".to_string(), "each".to_string()]
+        );
+        assert_eq!(uq.directives, vec!["req".to_string()]);
+    }
+
+    // ------------------------------------------------------------------
+    // max_body_length only (no nontrivial_body) → min is None
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn max_body_length_only_sets_min_to_none() {
+        let toml = r#"
+[[needs.types]]
+directive = "req"
+
+[tool.patdhlk-skills.lint.max_body_length]
+req = 500
+"#;
+        let (_tmp, project) = make_project(toml);
+        let cfg = Config::load(&project).unwrap();
+        let lint = cfg.lint.expect("lint Some");
+        let bl = lint.body_length.expect("body_length Some");
+        let req_bl = bl.get("req").expect("req key");
+        assert_eq!(req_bl.min, None);
+        assert_eq!(req_bl.max, Some(500));
+    }
+
+    // ------------------------------------------------------------------
+    // Validation errors: body-length bounds
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn nontrivial_body_zero_is_config_error() {
+        let toml = r#"
+[[needs.types]]
+directive = "issue"
+
+[tool.patdhlk-skills.lint.nontrivial_body]
+issue = 0
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("nontrivial_body"),
+            "error must mention nontrivial_body, got: {msg}"
+        );
+        assert!(
+            msg.contains("issue"),
+            "error must name the directive, got: {msg}"
+        );
+        assert_eq!(err.kind(), "config");
+    }
+
+    #[test]
+    fn nontrivial_body_negative_is_config_error() {
+        let toml = r#"
+[[needs.types]]
+directive = "req"
+
+[tool.patdhlk-skills.lint.nontrivial_body]
+req = -5
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("nontrivial_body") || msg.contains("minimum"));
+    }
+
+    #[test]
+    fn max_body_length_zero_is_config_error() {
+        let toml = r#"
+[[needs.types]]
+directive = "req"
+
+[tool.patdhlk-skills.lint.max_body_length]
+req = 0
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("max_body_length"),
+            "error must mention max_body_length, got: {msg}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Validation errors: empty word lists
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn weasel_words_empty_words_list_is_config_error() {
+        let toml = r#"
+[[needs.types]]
+directive = "req"
+
+[tool.patdhlk-skills.lint.weasel_words]
+words = []
+directives = ["req"]
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("weasel_words"),
+            "error must mention weasel_words, got: {msg}"
+        );
+        assert_eq!(err.kind(), "config");
+    }
+
+    #[test]
+    fn weasel_words_empty_string_in_words_is_config_error() {
+        let toml = r#"
+[[needs.types]]
+directive = "req"
+
+[tool.patdhlk-skills.lint.weasel_words]
+words = ["good", ""]
+directives = ["req"]
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("weasel_words"), "got: {msg}");
+    }
+
+    #[test]
+    fn weasel_words_empty_directives_list_is_config_error() {
+        let toml = r#"
+[[needs.types]]
+directive = "req"
+
+[tool.patdhlk-skills.lint.weasel_words]
+words = ["significant"]
+directives = []
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("weasel_words"), "got: {msg}");
+    }
+
+    #[test]
+    fn weasel_words_empty_string_in_directives_is_config_error() {
+        let toml = r#"
+[[needs.types]]
+directive = "req"
+
+[tool.patdhlk-skills.lint.weasel_words]
+words = ["significant"]
+directives = ["req", ""]
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("weasel_words"), "got: {msg}");
+    }
+
+    // ------------------------------------------------------------------
+    // Validation errors: empty quantifier lists
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn unenumerated_quantifiers_empty_quantifiers_list_is_config_error() {
+        let toml = r#"
+[[needs.types]]
+directive = "req"
+
+[tool.patdhlk-skills.lint.unenumerated_quantifiers]
+quantifiers = []
+directives = ["req"]
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("unenumerated_quantifiers"), "got: {msg}");
+        assert_eq!(err.kind(), "config");
+    }
+
+    #[test]
+    fn unenumerated_quantifiers_empty_string_in_quantifiers_is_config_error() {
+        let toml = r#"
+[[needs.types]]
+directive = "req"
+
+[tool.patdhlk-skills.lint.unenumerated_quantifiers]
+quantifiers = ["all", ""]
+directives = ["req"]
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("unenumerated_quantifiers"), "got: {msg}");
+    }
+
+    #[test]
+    fn unenumerated_quantifiers_empty_directives_list_is_config_error() {
+        let toml = r#"
+[[needs.types]]
+directive = "req"
+
+[tool.patdhlk-skills.lint.unenumerated_quantifiers]
+quantifiers = ["all"]
+directives = []
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("unenumerated_quantifiers"), "got: {msg}");
+    }
+
+    #[test]
+    fn unenumerated_quantifiers_empty_string_in_directives_is_config_error() {
+        let toml = r#"
+[[needs.types]]
+directive = "req"
+
+[tool.patdhlk-skills.lint.unenumerated_quantifiers]
+quantifiers = ["all"]
+directives = ["req", ""]
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("unenumerated_quantifiers"), "got: {msg}");
+    }
+
+    // ------------------------------------------------------------------
+    // Fail-on-drift: undeclared directive in each lint rule position
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn required_sections_undeclared_directive_is_drift_error() {
+        let toml = r#"
+[[needs.types]]
+directive = "issue"
+
+[tool.patdhlk-skills.lint.required_sections]
+arch-decision = ["Context", "Decision"]
+"#;
+        // "arch-decision" not declared
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("arch-decision"),
+            "error must name the undeclared directive, got: {msg}"
+        );
+        assert_eq!(err.kind(), "config");
+    }
+
+    #[test]
+    fn nontrivial_body_undeclared_directive_is_drift_error() {
+        let toml = r#"
+[[needs.types]]
+directive = "issue"
+
+[tool.patdhlk-skills.lint.nontrivial_body]
+req = 100
+"#;
+        // "req" not declared
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("req"),
+            "error must name the undeclared directive, got: {msg}"
+        );
+        assert_eq!(err.kind(), "config");
+    }
+
+    #[test]
+    fn max_body_length_undeclared_directive_is_drift_error() {
+        let toml = r#"
+[[needs.types]]
+directive = "issue"
+
+[tool.patdhlk-skills.lint.max_body_length]
+feat = 500
+"#;
+        // "feat" not declared
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("feat"),
+            "error must name the undeclared directive, got: {msg}"
+        );
+        assert_eq!(err.kind(), "config");
+    }
+
+    #[test]
+    fn weasel_words_undeclared_directive_is_drift_error() {
+        let toml = r#"
+[[needs.types]]
+directive = "issue"
+
+[tool.patdhlk-skills.lint.weasel_words]
+words = ["significant"]
+directives = ["req"]
+"#;
+        // "req" not declared
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("req"),
+            "error must name the undeclared directive, got: {msg}"
+        );
+        assert_eq!(err.kind(), "config");
+    }
+
+    #[test]
+    fn unenumerated_quantifiers_undeclared_directive_is_drift_error() {
+        let toml = r#"
+[[needs.types]]
+directive = "issue"
+
+[tool.patdhlk-skills.lint.unenumerated_quantifiers]
+quantifiers = ["all"]
+directives = ["arch-decision"]
+"#;
+        // "arch-decision" not declared
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("arch-decision"),
+            "error must name the undeclared directive, got: {msg}"
+        );
+        assert_eq!(err.kind(), "config");
+    }
+
+    // ------------------------------------------------------------------
+    // Drift error is kind "config" (exit 2)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn drift_error_is_kind_config() {
+        // Use required_sections as the representative rule.
+        let toml = r#"
+[[needs.types]]
+directive = "issue"
+
+[tool.patdhlk-skills.lint.required_sections]
+undeclared-type = ["Section A"]
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert_eq!(err.kind(), "config");
+    }
+
+    // ------------------------------------------------------------------
+    // required_sections: empty section list is a config error
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn required_sections_empty_section_list_is_config_error() {
+        let toml = r#"
+[[needs.types]]
+directive = "arch-decision"
+
+[tool.patdhlk-skills.lint.required_sections]
+arch-decision = []
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("arch-decision"),
+            "error must name the directive, got: {msg}"
+        );
+        assert!(
+            msg.contains("required_sections") || msg.contains("section list"),
+            "error must mention required_sections or section list, got: {msg}"
+        );
     }
 }

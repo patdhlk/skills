@@ -1152,3 +1152,195 @@ fn search_build_failure_surfaces_findings_under_search_verb() {
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0]["check"], "build");
 }
+
+#[cfg(unix)]
+#[test]
+fn dedup_near_copy_of_existing_issue_exits_one_duplicate() {
+    let (_tmp, config) = backlog_project("", "issue = \"issue\"\n");
+
+    // "first ready" is ISSUE_0001's exact title — a near-copy candidate.
+    let assert = pds()
+        .arg("dedup")
+        .arg("first ready")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.failure().code(1).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).expect("stdout is one JSON object");
+    assert_eq!(json["schema"], 1);
+    assert_eq!(json["verb"], "dedup");
+    assert_eq!(json["engine"], "bm25");
+    assert_eq!(json["verdict"], "duplicate");
+    assert!(json["threshold"].as_f64().is_some());
+    let hits = json["hits"].as_array().expect("hits array");
+    assert_eq!(hits[0]["id"], "ISSUE_0001");
+    assert!(hits[0]["score"].as_f64().unwrap() >= json["threshold"].as_f64().unwrap());
+}
+
+#[cfg(unix)]
+#[test]
+fn dedup_novel_candidate_exits_zero_unique() {
+    let (_tmp, config) = backlog_project("", "issue = \"issue\"\n");
+
+    let assert = pds()
+        .arg("dedup")
+        .arg("zebra astronomy quantum")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.success().code(0).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["verb"], "dedup");
+    assert_eq!(json["verdict"], "unique");
+    assert!(json["hits"].as_array().unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn dedup_non_issue_hit_does_not_gate() {
+    // "a feature" is FEAT_0001's exact title: a strong feat-typed hit must
+    // NOT flip the verdict (ADR_0021) — exit 0, hits still listed.
+    let (_tmp, config) = backlog_project("", "issue = \"issue\"\nfeature = \"feat\"\n");
+
+    let assert = pds()
+        .arg("dedup")
+        .arg("a feature")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.success().code(0).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["verdict"], "unique");
+    let hits = json["hits"].as_array().unwrap();
+    assert!(
+        hits.iter().any(|h| h["id"] == "FEAT_0001"),
+        "the feat hit must still be listed, got: {hits:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn dedup_threshold_flag_flips_the_verdict() {
+    // The candidate "ready zzzqqq" half-matches ISSUE_0001/ISSUE_0004
+    // ("ready" matches, "zzzqqq" is unknown): its normalized score lands at
+    // ~0.43 — deterministic, well away from the clamp ceiling. The same
+    // candidate must be unique at --threshold 0.5 and duplicate at
+    // --threshold 0.25, proving the flag governs the gate.
+    //
+    // NOTE: a single-token query like "ready" is the wrong probe here — the
+    // ×3 title weighting saturates tf and clamps the score to 1.0.
+    let (_tmp, config) = backlog_project("", "issue = \"issue\"\n");
+
+    let assert = pds()
+        .arg("dedup")
+        .arg("ready zzzqqq")
+        .arg("--threshold")
+        .arg("0.5")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.success().code(0).get_output().clone();
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["verdict"], "unique");
+    assert_eq!(json["threshold"], 0.5);
+    assert!(!json["hits"].as_array().unwrap().is_empty());
+
+    let assert = pds()
+        .arg("dedup")
+        .arg("ready zzzqqq")
+        .arg("--threshold")
+        .arg("0.25")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.failure().code(1).get_output().clone();
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["verdict"], "duplicate");
+    assert_eq!(json["threshold"], 0.25);
+}
+
+#[cfg(unix)]
+#[test]
+fn dedup_invalid_threshold_flag_is_config_error() {
+    let (_tmp, config) = backlog_project("", "issue = \"issue\"\n");
+
+    let assert = pds()
+        .arg("dedup")
+        .arg("anything")
+        .arg("--threshold")
+        .arg("1.5")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.failure().code(2).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["verb"], "dedup");
+    assert_eq!(json["error"]["kind"], "config");
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("--threshold"),
+        "got: {}",
+        json["error"]["message"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn dedup_empty_candidate_is_config_error() {
+    let (_tmp, config) = backlog_project("", "issue = \"issue\"\n");
+
+    let assert = pds()
+        .arg("dedup")
+        .arg("  ")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.failure().code(2).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["verb"], "dedup");
+    assert_eq!(json["error"]["kind"], "config");
+}
+
+#[cfg(unix)]
+#[test]
+fn dedup_missing_issue_role_is_config_error() {
+    // dedup gates on issue-typed hits, so it needs the issue role.
+    let (_tmp, config) = backlog_project("", "");
+
+    let assert = pds()
+        .arg("dedup")
+        .arg("anything")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.failure().code(2).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["verb"], "dedup");
+    assert_eq!(json["error"]["kind"], "config");
+}
+
+#[cfg(unix)]
+#[test]
+fn dedup_github_backend_is_tool_error() {
+    let (_tmp, config) = backlog_project("issue_backend = \"github\"\n", "issue = \"issue\"\n");
+
+    let assert = pds()
+        .arg("dedup")
+        .arg("anything")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.failure().code(2).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["verb"], "dedup");
+    assert_eq!(json["error"]["kind"], "tool");
+}

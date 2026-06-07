@@ -18,7 +18,7 @@ use crate::config::Config;
 use crate::error::Error;
 use crate::needs::{Need, NeedsCorpus};
 use crate::outcome::Outcome;
-use crate::queries::{CorpusResult, load_fresh_corpus};
+use crate::queries::{CorpusResult, load_fresh_corpus, prepare_corpus};
 
 /// Okapi BM25 term-frequency saturation parameter. Standard value; not
 /// configurable — nobody should tune this per-repo.
@@ -261,6 +261,50 @@ pub fn run_search(config: &Config, project_root: &Path, query: &str) -> Result<O
     Ok(Outcome::clean(payload))
 }
 
+/// `pds dedup`: rank all need types against the candidate text, then gate —
+/// verdict `"duplicate"` (failed outcome, exit 1) iff an issue-typed hit
+/// reaches the threshold (ADR_0021). `threshold_flag` is the `--threshold`
+/// CLI override; `None` falls back to the configured value.
+pub fn run_dedup(
+    config: &Config,
+    project_root: &Path,
+    candidate: &str,
+    threshold_flag: Option<f64>,
+) -> Result<Outcome, Error> {
+    if candidate.trim().is_empty() {
+        return Err(Error::Config {
+            message: "dedup candidate text must not be empty".to_string(),
+        });
+    }
+    let threshold = match threshold_flag {
+        Some(t) => {
+            crate::config::validate_threshold(t, "--threshold")?;
+            t
+        }
+        None => config.dedup_threshold,
+    };
+    let gh_hint = "gh search issues --state all \"<candidate>\"";
+    let (corpus_result, directive) = prepare_corpus(config, project_root, gh_hint)?;
+    let corpus = match corpus_result {
+        CorpusResult::Ready(c) => c,
+        CorpusResult::BuildFailed(failed) => return Ok(failed),
+    };
+    let index = Index::build(&corpus);
+    let hits = index.rank(candidate);
+    let verdict = dedup_verdict(&hits, &directive, threshold);
+
+    let mut payload = Map::new();
+    payload.insert("engine".to_string(), Value::String("bm25".to_string()));
+    payload.insert("threshold".to_string(), json!(threshold));
+    payload.insert("verdict".to_string(), Value::String(verdict.to_string()));
+    payload.insert("hits".to_string(), hits_payload(&hits));
+    if verdict == "duplicate" {
+        Ok(Outcome::failed(payload))
+    } else {
+        Ok(Outcome::clean(payload))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,6 +490,13 @@ mod tests {
     #[test]
     fn empty_hits_are_unique() {
         assert_eq!(dedup_verdict(&[], "issue", 0.5), "unique");
+    }
+
+    #[test]
+    fn clamped_score_at_threshold_one_is_duplicate() {
+        let corpus = corpus_from(RETRIEVAL_CORPUS);
+        let hits = fixture_hits(&corpus, &[("ISSUE_0001", 1.0)]);
+        assert_eq!(dedup_verdict(&hits, "issue", 1.0), "duplicate");
     }
 
     #[test]

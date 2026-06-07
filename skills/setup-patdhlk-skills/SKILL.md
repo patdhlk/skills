@@ -22,7 +22,7 @@ All templates referenced below live in [REFERENCE.md](REFERENCE.md).
 - A Sphinx project using `sphinx_needs` (a `conf.py` mentioning it)? Note its
   source dir — that becomes `spec_dir`.
 - `uv` available? A `pyproject.toml`? A git remote GitHub can see (`gh repo
-  view`)? `ubc` on PATH?
+  view`)? `ubc` on PATH? `pds` on PATH (`command -v pds`)?
 
 ### 2. Choose the issue backend
 
@@ -51,11 +51,18 @@ If `issue_backend = "sphinx-needs"` and no directive maps to `issue`: offer to
 add the `issue` type plus the status state-machine schema (ADR_0005) and an
 `issues/` doc — templates in REFERENCE.md §3.
 
-### 5. Configure the builder
+### 5. Configure the builder and the gate CLI
 
 `ubc` on PATH → persist `builder = "ubc"`. Missing → on Linux offer the
 install script (REFERENCE.md §4); otherwise persist `builder =
 "sphinx-build"` and mention ubc is faster when available (ADR_0006).
+
+`pds` is the gate-and-query CLI (ADR_0017): `pds check` is the strict gate,
+`pds build` produces a fresh needs.json. It runs whichever builder is
+configured above. Detect with `command -v pds`; when missing, OFFER the
+GitHub Releases installer one-liner with consent (REFERENCE.md §4a), and
+mention the `cargo install pds-cli` fallback. The raw `sphinx-build` /
+`ubc` commands remain the no-pds fallback everywhere the gate appears.
 
 ### 6. Optional extras (each opt-in, ask once)
 
@@ -66,13 +73,21 @@ install script (REFERENCE.md §4); otherwise persist `builder =
   (whichever exists; create `CLAUDE.md` if neither) per REFERENCE.md §7.
 - **Makefile**: `html` / `strict` / `needs` / `serve` / `clean` targets
   (REFERENCE.md §8) — if a Makefile exists, offer to append the targets.
+- **pds config tables**: offer to scaffold `[tool.patdhlk-skills.gate]`
+  (optional `needs_json` / `sphinx_command` keys; REFERENCE.md §9) and the
+  forward-looking `lint` / `rubrics` / `verdicts` tables plus the `verdict`
+  type and role-map entry (REFERENCE.md §10). An absent table simply means
+  `pds check` runs with its defaults (ADR_0014) — never add a table the
+  user declines.
 
 ### 7. Validate and report
 
-Run the strict gate: `uv run sphinx-build -W -b html <spec_dir>
-<spec_dir>/_build/html` (ADR_0007). It must pass before reporting success.
-Then summarize: backend, role map, builder, what was scaffolded vs reused,
-and the build/query commands now available.
+Run the strict gate: `pds check` (ADR_0007, ADR_0017) — no pds: `uv run
+sphinx-build -W -b html <spec_dir> <spec_dir>/_build/html`. It must pass
+(exit 0) before reporting success; exit 1 means fix the corpus and re-run,
+exit 2 means a tool/config error to resolve. Then summarize: backend, role
+map, builder, whether pds is installed, what was scaffolded vs reused, and
+the build/query commands now available.
 
 ## Hard rules
 

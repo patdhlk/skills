@@ -81,12 +81,14 @@ multiple issue numbers).
 ### 4. Validate and report
 
 Any spec mutation (3a always; 3b's back-links) ends with the strict gate
-(ADR_0007):
+(ADR_0007, ADR_0017):
 
 ```bash
-uv run sphinx-build -W -b html <spec_dir> <spec_dir>/_build/html
+pds check
+# no pds: uv run sphinx-build -W -b html <spec_dir> <spec_dir>/_build/html
 ```
 
+Exit 1 means fix the corpus and re-run; exit 2 means stop and escalate.
 Report the created issue IDs/URLs, which reqs each covers, and any reqs
 left unsliced (with why). Suggest `/triage` if anything was filed
 `needs-triage`.

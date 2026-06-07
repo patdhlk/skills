@@ -188,6 +188,28 @@ the devcontainer in §5 runs it automatically.) macOS/Windows hosts: persist
 ubc usage note: `ubc build needs --outpath <file>` — the flag is `--outpath`
 and the target directory must already exist.
 
+## §4a pds install (the gate-and-query CLI)
+
+`pds` (ADR_0017) is the strict gate (`pds check`) and the needs builder
+(`pds build`); it drives whichever `builder` is configured. Detect with
+`command -v pds`. When missing, offer the GitHub Releases shell installer
+(with consent):
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/patdhlk/skills/releases/latest/download/pds-cli-installer.sh | sh
+```
+
+Fallback (any platform with a Rust toolchain): `cargo install pds-cli`.
+
+macOS note: the shell installer sidesteps Gatekeeper (curl does not set the
+quarantine flag); if a copied binary is ever quarantined, see the Gatekeeper
+section of `cli/README.md` for the `xattr -d` / ad-hoc-sign fix.
+
+In this repo specifically, the in-tree crate is the no-install fallback:
+`cargo run -q --manifest-path cli/Cargo.toml -p pds-cli -- <verb>` (this is
+exactly what the Makefile's `PDS` variable falls back to).
+
 ## §5 Devcontainer
 
 Copy from github.com/patdhlk/sphinx-needs-starter (`.devcontainer/`):
@@ -196,6 +218,9 @@ Copy from github.com/patdhlk/sphinx-needs-starter (`.devcontainer/`):
 `Dockerfile`, `install-ubc.sh`. Adjust `esbonio.sphinx.confDir` to `<spec>`.
 
 ## §6 CI workflow
+
+The gate job runs `pds check` (ADR_0017). Install `pds` from the Releases
+shell installer (§4a); the raw `sphinx-build` lines are the no-pds fallback.
 
 `.github/workflows/spec.yml`:
 
@@ -206,14 +231,20 @@ on:
     branches: [main]
   pull_request:
 jobs:
-  strict-build:
+  gate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
-      - run: uv run sphinx-build -W -b html <spec> <spec>/_build/html
-      - run: uv run sphinx-build -b needs <spec> <spec>/_build/needs
+      - name: Install pds
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            https://github.com/patdhlk/skills/releases/latest/download/pds-cli-installer.sh | sh
+      - name: Strict gate (pds check)
+        run: pds check
+        # no pds: uv run sphinx-build -W -b html <spec> <spec>/_build/html
+        #         && uv run sphinx-build -b needs <spec> <spec>/_build/needs
 ```
 
 ## §7 CLAUDE.md agent block
@@ -223,13 +254,15 @@ jobs:
 
 - Issue backend: **<backend>**. Config + role map: `ubproject.toml` →
   `[tool.patdhlk-skills]`. Resolve directives ONLY through the role map.
-- Query the needs corpus via needs.json, never by grepping RST:
-  `ubc build needs --outpath <spec>/_build/needs/needs.json` (or
-  `uv run sphinx-build -b needs <spec> <spec>/_build/needs`), then `jq`.
-  Rebuild before every query.
+- Query the needs corpus via needs.json, never by grepping RST: `pds build`
+  (no pds: `ubc build needs --outpath <spec>/_build/needs/needs.json`, or
+  `uv run sphinx-build -b needs <spec> <spec>/_build/needs`), then `jq` on
+  `<spec>/_build/needs/needs.json`. Rebuild before every query.
 - New need IDs: dense max+1 per prefix, from a fresh needs.json.
-- Every spec mutation must end with the strict gate:
-  `uv run sphinx-build -W -b html <spec> <spec>/_build/html`.
+- Every spec mutation must end with the strict gate: `pds check` (no pds:
+  `uv run sphinx-build -W -b html <spec> <spec>/_build/html`). Exit 0 =
+  clean, 1 = violations (read the JSON findings on stdout, fix the corpus),
+  2 = tool/config error (stop and escalate). Branch on the exit code.
 - Issues (sphinx-needs backend) live in `<issue_doc>`; `:status:` carries
   the triage state machine: needs-triage → needs-info | ready-for-agent |
   ready-for-human → in-progress → done | wontfix. Edit status in place —
@@ -240,25 +273,28 @@ jobs:
 
 ## §8 Makefile
 
+The gate (`strict`/`needs`) runs through `pds`: use it from PATH when
+present, else fall back to the in-tree crate via `cargo run` so the gate
+works for any contributor with Rust. `pds` owns the per-builder adapter
+(ubc preferred, sphinx fallback), so there is no hand-rolled branching.
+
 ```make
 SOURCEDIR = <spec>
 BUILDDIR  = <spec>/_build
 
+# `pds` from PATH if present, else a quiet `cargo run` against the in-tree crate.
+PDS = $(shell command -v pds 2>/dev/null || echo "cargo run -q --manifest-path cli/Cargo.toml -p pds-cli --")
+
 .PHONY: html strict needs serve clean
 
-html:  ## Build the HTML spec
+html:  ## Build the HTML spec (NOT the gate — ADR_0017)
 	uv run sphinx-build -b html "$(SOURCEDIR)" "$(BUILDDIR)/html"
 
-strict:  ## Strict build gate — every spec mutation must pass this
-	uv run sphinx-build -W -b html "$(SOURCEDIR)" "$(BUILDDIR)/html"
+strict:  ## Strict gate — every spec mutation must pass this (ADR_0007, ADR_0017)
+	$(PDS) check
 
-needs:  ## Build needs.json for querying (ubc preferred)
-	@mkdir -p "$(BUILDDIR)/needs"
-	@if command -v ubc >/dev/null 2>&1; then \
-		ubc build needs --outpath "$(BUILDDIR)/needs/needs.json"; \
-	else \
-		uv run sphinx-build -b needs "$(SOURCEDIR)" "$(BUILDDIR)/needs"; \
-	fi
+needs:  ## Build a fresh needs.json for querying (ADR_0006)
+	$(PDS) build
 
 serve:  ## Live preview with auto-rebuild (port 8000)
 	uv run sphinx-autobuild "$(SOURCEDIR)" "$(BUILDDIR)/html"
@@ -267,5 +303,63 @@ clean:  ## Remove build artifacts
 	rm -rf "$(BUILDDIR)"
 ```
 
+(If `pds` is published and always installed in your environment, the `PDS`
+fallback to the in-tree crate can be dropped — keep it for repos that build
+`pds` from source, like patdhlk/skills itself.)
+
 When appending to an existing Makefile, rename colliding targets with a
 `spec-` prefix (`spec-html`, `spec-strict`, ...).
+
+## §9 The gate config table (`[tool.patdhlk-skills.gate]`)
+
+Optional. `pds check` / `pds build` work with no table — defaults derive
+from `spec_dir` and `builder`. Offer to scaffold it only when the repo
+needs to override a path or builder invocation:
+
+```toml
+[tool.patdhlk-skills.gate]
+# needs_json   = "<spec>/_build/needs/needs.json"   # default: <spec>/_build/needs/needs.json
+# sphinx_command = "uv run sphinx-build"            # default: how pds invokes the sphinx builder
+```
+
+Both keys are optional; an absent `[tool.patdhlk-skills.gate]` table means
+`pds check` runs with its built-in defaults (ADR_0014).
+
+## §10 Forward-looking pds config (declared now, ignored by today's pds)
+
+These tables and the `verdict` type let later `pds` verbs (lint /
+verdict-check, not yet shipped) read project policy from config. Today's
+`pds` IGNORES them — offer to scaffold only with the user's understanding
+that they are forward-looking. Absent tables = those future checks are off
+(ADR_0014). Mark them clearly when you write them.
+
+```toml
+# Forward-looking — declared for future `pds` verbs; today's pds ignores these.
+[tool.patdhlk-skills.lint]
+# rules the future `pds lint` verb will enforce; semantics live in the skills
+
+# ADR_0016: rubric axes are DECLARED in config; their semantics live in the
+# review skills, not here.
+[tool.patdhlk-skills.rubrics.<name>]
+# axes = ["clarity", "testability", ...]
+
+[tool.patdhlk-skills.verdicts]
+# verdict policy for the future `pds verdict-check` verb
+```
+
+Verdicts (ADR_0015) are derived sphinx-needs records — IDs
+`VERDICT_<judged-id>`, fields `:rubric:` / `:axes_failed:` /
+`:fingerprint:`, living under `<spec>/verdicts/`. To prepare the corpus,
+offer the type + role-map entry:
+
+```toml
+[[needs.types]]
+directive = "verdict"
+title = "Verdict"
+prefix = "VERDICT_"
+color = "#E0A6C8"
+style = "node"
+
+[tool.patdhlk-skills.roles]
+verdict = "verdict"
+```

@@ -66,14 +66,16 @@ Allocate a dense max+1 ID (ADR_0008) and append:
    ❌ Three versions to release in lockstep.
 ```
 
-Then the strict gate (ADR_0007) — the decision is not recorded until it
-passes:
+Then the strict gate (ADR_0007, ADR_0017) — the decision is not recorded
+until it passes:
 
 ```bash
-uv run sphinx-build -W -b html <spec_dir> <spec_dir>/_build/html
+pds check
+# no pds: uv run sphinx-build -W -b html <spec_dir> <spec_dir>/_build/html
 ```
 
-Report the new ID and its links.
+Exit 0 records the decision; exit 1 means fix the corpus and re-run; exit 2
+is a tool/config error — stop and escalate. Report the new ID and its links.
 
 ## Hard rules
 

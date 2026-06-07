@@ -61,13 +61,15 @@ precisely — in the background, never blocking the user.
 ### 3. Close the session
 
 When the user is done: run the strict gate over any local mutations
-(ADR_0007) —
+(ADR_0007, ADR_0017) —
 
 ```bash
-uv run sphinx-build -W -b html <spec_dir> <spec_dir>/_build/html
+pds check
+# no pds: uv run sphinx-build -W -b html <spec_dir> <spec_dir>/_build/html
 ```
 
-— then summarize: filed issues (ID + title), deduped reports, anything the
+— exit 1 means fix the corpus and re-run, exit 2 means stop and escalate —
+then summarize: filed issues (ID + title), deduped reports, anything the
 user mentioned but declined to file. Suggest `/triage` as the natural next
 step — the session deliberately leaves everything at `needs-triage`.
 

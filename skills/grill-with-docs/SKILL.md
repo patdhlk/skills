@@ -48,12 +48,14 @@ Layered on top of the normal grilling:
    title and links with the user, write, move to the next branch.
 
 Every inline write ends with the strict gate before the interview continues
-(ADR_0007):
+(ADR_0007, ADR_0017):
 
 ```bash
-uv run sphinx-build -W -b html <spec_dir> <spec_dir>/_build/html
+pds check
+# no pds: uv run sphinx-build -W -b html <spec_dir> <spec_dir>/_build/html
 ```
 
+Exit 1 means fix the corpus and re-run; exit 2 means stop and escalate.
 A grilling session that leaves the spec broken has negative value.
 
 ## Ending the session

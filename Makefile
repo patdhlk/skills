@@ -8,8 +8,14 @@
 SOURCEDIR = spec
 BUILDDIR  = spec/_build
 
-# `pds` from PATH if present, else a quiet `cargo run` against the in-tree crate.
-PDS = $(shell command -v pds 2>/dev/null || echo "cargo run -q --manifest-path cli/Cargo.toml -p pds-cli --")
+# `pds` from PATH if present, else a quiet `cargo run` against the in-tree
+# crate. The fallback runs FROM cli/ so rustup picks up cli/rust-toolchain.toml
+# (toolchain-file resolution is cwd-based, not manifest-based — a repo-root
+# cargo run would build with the machine's default toolchain and fail on
+# runners older than the pinned rustc). `pds check`/`pds build` find the
+# project root from cli/ by walking up to ubproject.toml (ADR_0020).
+# Note: $(shell ...) is evaluated once at Makefile parse time.
+PDS = $(shell command -v pds 2>/dev/null || echo "cd cli && cargo run -q -p pds-cli --")
 
 .PHONY: help html strict needs serve clean
 

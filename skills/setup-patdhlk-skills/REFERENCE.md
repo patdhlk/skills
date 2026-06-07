@@ -207,7 +207,8 @@ quarantine flag); if a copied binary is ever quarantined, see the Gatekeeper
 section of `cli/README.md` for the `xattr -d` / ad-hoc-sign fix.
 
 In this repo specifically, the in-tree crate is the no-install fallback:
-`cargo run -q --manifest-path cli/Cargo.toml -p pds-cli -- <verb>` (this is
+`cd cli && cargo run -q -p pds-cli -- <verb>` — run from cli/ so rustup picks
+up the pinned toolchain; pds finds the project root by walk-up (this is
 exactly what the Makefile's `PDS` variable falls back to).
 
 ## §5 Devcontainer
@@ -282,8 +283,9 @@ works for any contributor with Rust. `pds` owns the per-builder adapter
 SOURCEDIR = <spec>
 BUILDDIR  = <spec>/_build
 
-# `pds` from PATH if present, else a quiet `cargo run` against the in-tree crate.
-PDS = $(shell command -v pds 2>/dev/null || echo "cargo run -q --manifest-path cli/Cargo.toml -p pds-cli --")
+# `pds` from PATH if present, else a quiet `cargo run` against the in-tree
+# crate — from cli/ so rustup honours cli/rust-toolchain.toml (cwd-based).
+PDS = $(shell command -v pds 2>/dev/null || echo "cd cli && cargo run -q -p pds-cli --")
 
 .PHONY: html strict needs serve clean
 

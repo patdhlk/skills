@@ -952,6 +952,55 @@ fn check_with_lint_table_appends_lint_findings_after_builder() {
 
 #[cfg(unix)]
 #[test]
+fn lint_required_sections_on_undeclared_directive_is_config_error() {
+    // ubproject.toml declares only "issue" in [[needs.types]] but the lint
+    // table's required_sections references "arch-decision" which is not
+    // declared.  Config::load must reject this at load time: pds lint exits 2,
+    // stdout JSON has error.kind == "config", and the message names
+    // "arch-decision".  The builder must NOT be invoked (no marker file).
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let script = root.join("fake-sphinx.sh");
+    write_script(
+        &script,
+        r#"#!/bin/sh
+touch "$(dirname "$0")/built.marker"
+exit 0
+"#,
+    );
+    std::fs::create_dir_all(root.join("spec")).unwrap();
+    let config = root.join("ubproject.toml");
+    let toml = format!(
+        "[[needs.types]]\ndirective = \"issue\"\n\n\
+         [tool.patdhlk-skills]\nbuilder = \"sphinx-build\"\nspec_dir = \"spec\"\n\n\
+         [tool.patdhlk-skills.gate]\nsphinx_command = [\"{}\"]\n\n\
+         [tool.patdhlk-skills.lint.required_sections]\n\
+         arch-decision = [\"Context\", \"Decision\", \"Consequences\"]\n",
+        script.display()
+    );
+    std::fs::write(&config, toml).unwrap();
+
+    let assert = pds().arg("lint").arg("--config").arg(&config).assert();
+    let out = assert.failure().code(2).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).expect("stdout is one JSON object");
+    assert_eq!(json["schema"], 1);
+    assert_eq!(json["verb"], "lint");
+    assert_eq!(json["error"]["kind"], "config");
+    let msg = json["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("arch-decision"),
+        "error message must name the undeclared directive, got: {msg}"
+    );
+    assert!(
+        !root.join("built.marker").exists(),
+        "builder must NOT be invoked when config is invalid"
+    );
+    assert!(!out.stderr.is_empty(), "stderr should carry a human line");
+}
+
+#[cfg(unix)]
+#[test]
 fn check_with_builder_failure_does_not_run_lint() {
     // Builder fails => corpus suspect => lint must NOT run; only the build
     // finding is present.

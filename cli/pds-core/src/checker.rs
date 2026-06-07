@@ -29,6 +29,8 @@ use crate::builder::{
 };
 use crate::config::{Builder, Config};
 use crate::error::Error;
+use crate::lint::{any_rule_enabled, finding_json, lint_corpus};
+use crate::needs::NeedsCorpus;
 use crate::outcome::Outcome;
 
 /// One step of `pds check`: a named child invocation. The `name` becomes the
@@ -113,6 +115,18 @@ pub fn run_check(config: &Config, project_root: &Path) -> Result<Outcome, Error>
                 config.needs_json.display()
             ),
         });
+    }
+
+    // Lint runs only AFTER the builder gate succeeds and produces a corpus. If
+    // any builder step failed the corpus is suspect, so lint is skipped and the
+    // builder findings are returned as today. With a clean build and an enabled
+    // lint table, lint runs on the just-built needs.json (no second build) and
+    // its findings are appended to the same array.
+    if findings.is_empty() && any_rule_enabled(config.lint.as_ref()) {
+        let corpus = NeedsCorpus::load(&config.needs_json)?;
+        let lint = config.lint.as_ref().expect("any_rule_enabled implies Some");
+        let lint_findings = lint_corpus(&corpus, lint, &config.exempt_statuses);
+        findings.extend(lint_findings.iter().map(finding_json));
     }
 
     let mut payload = Map::new();

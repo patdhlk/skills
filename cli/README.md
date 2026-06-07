@@ -98,6 +98,10 @@ pds check
 # Build the corpus only (produces needs.json, exits 0/1/2).
 pds build
 
+# Lint need bodies for substance (required sections, weasel words, …).
+# Absent [tool.patdhlk-skills.lint] table => clean exit 0 without building.
+pds lint
+
 # Per-status counts over the issue backlog (rebuilds first; exits 0/1/2).
 pds status
 

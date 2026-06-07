@@ -793,3 +793,182 @@ fn next_build_failure_surfaces_findings_under_next_verb() {
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0]["check"], "build");
 }
+
+// ---------------------------------------------------------------------------
+// `pds lint` / `pds check` lint-integration E2E (unix-only: fake builders).
+// ---------------------------------------------------------------------------
+
+/// A fake sphinx-build that drops a `built.marker` file next to itself (so a
+/// test can prove whether the builder was invoked) and writes a needs.json
+/// with one `req` need whose body uses an unenumerated quantifier + weasel word.
+#[cfg(unix)]
+const FAKE_SPHINX_LINT_VIOLATION: &str = r#"#!/bin/sh
+touch "$(dirname "$0")/built.marker"
+outdir="$(eval echo \${$#})"
+mkdir -p "$outdir"
+cat > "$outdir/needs.json" <<'JSON'
+{
+  "current_version": "",
+  "project": "t",
+  "versions": { "": { "needs": {
+    "REQ_0001": {"id":"REQ_0001","type":"req","title":"r","content":"All inputs shall be robust."}
+  } } }
+}
+JSON
+exit 0
+"#;
+
+/// A fake sphinx-build that drops the marker and writes a clean `req` corpus
+/// (enumerated quantifier, no weasel words).
+#[cfg(unix)]
+const FAKE_SPHINX_LINT_CLEAN: &str = r#"#!/bin/sh
+touch "$(dirname "$0")/built.marker"
+outdir="$(eval echo \${$#})"
+mkdir -p "$outdir"
+cat > "$outdir/needs.json" <<'JSON'
+{
+  "current_version": "",
+  "project": "t",
+  "versions": { "": { "needs": {
+    "REQ_0001": {"id":"REQ_0001","type":"req","title":"r","content":"All of the declared inputs shall be validated within 5 ms."}
+  } } }
+}
+JSON
+exit 0
+"#;
+
+/// Set up a project routed at `body`, declaring `req` in [[needs.types]], with
+/// the given `[tool.patdhlk-skills.lint]` table body appended (may be empty to
+/// omit the table). Returns (tempdir, config_path).
+#[cfg(unix)]
+fn lint_project(body: &str, lint_table: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let script = root.join("fake-sphinx.sh");
+    write_script(&script, body);
+    std::fs::create_dir_all(root.join("spec")).unwrap();
+    let config = root.join("ubproject.toml");
+    let toml = format!(
+        "[[needs.types]]\ndirective = \"req\"\n\n\
+         [tool.patdhlk-skills]\nbuilder = \"sphinx-build\"\nspec_dir = \"spec\"\n\n\
+         [tool.patdhlk-skills.gate]\nsphinx_command = [\"{}\"]\n{lint_table}",
+        script.display()
+    );
+    std::fs::write(&config, toml).unwrap();
+    (tmp, config)
+}
+
+/// A lint table flagging the weasel word "robust" and quantifier "all" on req.
+#[cfg(unix)]
+const LINT_TABLE_REQ: &str = "\n[tool.patdhlk-skills.lint.weasel_words]\n\
+     words = [\"robust\"]\ndirectives = [\"req\"]\n\n\
+     [tool.patdhlk-skills.lint.unenumerated_quantifiers]\n\
+     quantifiers = [\"all\"]\ndirectives = [\"req\"]\n";
+
+#[cfg(unix)]
+#[test]
+fn lint_with_no_table_is_clean_and_does_not_build() {
+    // No lint table at all: clean exit 0, empty findings, and the builder must
+    // NOT have run (no marker file).
+    let (tmp, config) = lint_project(FAKE_SPHINX_LINT_VIOLATION, "");
+
+    let assert = pds().arg("lint").arg("--config").arg(&config).assert();
+    let out = assert.success().code(0).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).expect("stdout is one JSON object");
+    assert_eq!(json["verb"], "lint");
+    let findings = json["findings"].as_array().expect("findings array");
+    assert!(findings.is_empty(), "no lint table => empty findings");
+    assert!(
+        !tmp.path().join("built.marker").exists(),
+        "lint with no enabled rules must NOT invoke the builder"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn lint_with_violations_exits_one_with_namespaced_findings() {
+    let (_tmp, config) = lint_project(FAKE_SPHINX_LINT_VIOLATION, LINT_TABLE_REQ);
+
+    let assert = pds().arg("lint").arg("--config").arg(&config).assert();
+    let out = assert.failure().code(1).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).expect("stdout is one JSON object");
+    assert_eq!(json["verb"], "lint");
+    let findings = json["findings"].as_array().expect("findings array");
+    assert_eq!(
+        findings.len(),
+        2,
+        "weasel word + quantifier => two findings"
+    );
+    for f in findings {
+        assert_eq!(f["need"], "REQ_0001", "need id must be populated");
+        assert_eq!(f["severity"], "error");
+        assert!(
+            f["check"].as_str().unwrap().starts_with("lint:"),
+            "check must carry the lint: prefix, got: {}",
+            f["check"]
+        );
+    }
+    // needs_json reported (fresh corpus was built).
+    assert!(json["needs_json"].as_str().unwrap().ends_with("needs.json"));
+}
+
+#[cfg(unix)]
+#[test]
+fn lint_clean_corpus_exits_zero() {
+    let (_tmp, config) = lint_project(FAKE_SPHINX_LINT_CLEAN, LINT_TABLE_REQ);
+
+    let assert = pds().arg("lint").arg("--config").arg(&config).assert();
+    let out = assert.success().code(0).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).expect("stdout is one JSON object");
+    assert_eq!(json["verb"], "lint");
+    assert!(json["findings"].as_array().unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn check_with_lint_table_appends_lint_findings_after_builder() {
+    // Clean builder gate, then lint fires on the corpus => exit 1 with lint
+    // findings present alongside the (empty) builder findings.
+    let (_tmp, config) = lint_project(FAKE_SPHINX_LINT_VIOLATION, LINT_TABLE_REQ);
+
+    let assert = pds().arg("check").arg("--config").arg(&config).assert();
+    let out = assert.failure().code(1).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).expect("stdout is one JSON object");
+    assert_eq!(json["verb"], "check");
+    let findings = json["findings"].as_array().expect("findings array");
+    assert_eq!(findings.len(), 2, "two lint findings appended");
+    assert!(
+        findings
+            .iter()
+            .all(|f| f["check"].as_str().unwrap().starts_with("lint:")),
+        "all findings are lint findings (builder gate passed)"
+    );
+    assert!(findings.iter().all(|f| f["need"] == "REQ_0001"));
+}
+
+#[cfg(unix)]
+#[test]
+fn check_with_builder_failure_does_not_run_lint() {
+    // Builder fails => corpus suspect => lint must NOT run; only the build
+    // finding is present.
+    let (_tmp, config) = lint_project(FAKE_SPHINX_FAIL, LINT_TABLE_REQ);
+
+    let assert = pds().arg("check").arg("--config").arg(&config).assert();
+    let out = assert.failure().code(1).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).expect("stdout is one JSON object");
+    assert_eq!(json["verb"], "check");
+    let findings = json["findings"].as_array().expect("findings array");
+    assert_eq!(findings.len(), 1, "only the builder finding");
+    assert_eq!(findings[0]["check"], "build");
+    assert!(
+        findings
+            .iter()
+            .all(|f| f["check"].as_str().unwrap() != "lint:weasel-words"),
+        "no lint findings when the build failed"
+    );
+}

@@ -1776,7 +1776,7 @@ fn check_with_both_lint_and_verdict_tables_both_findings_coexist() {
         "one finding must carry the lint: prefix, got: {checks:?}"
     );
     assert!(
-        checks.iter().any(|&c| c == "verdict:missing"),
+        checks.contains(&"verdict:missing"),
         "one finding must be verdict:missing, got: {checks:?}"
     );
     assert!(

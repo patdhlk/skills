@@ -245,7 +245,7 @@ The dogfooded backlog (:need:`ADR_0012`): every v1 skill port is an
 
 .. issue:: Verdict directives and pds verdict-check
    :id: ISSUE_0014
-   :status: ready-for-agent
+   :status: done
    :kind: feature
    :links: ADR_0015, ADR_0016
 

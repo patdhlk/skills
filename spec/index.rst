@@ -12,6 +12,7 @@ design decisions in :doc:`architecture/index`.
    features/index
    issues/index
    architecture/index
+   verdicts/index
    glossary
 
 Status overview

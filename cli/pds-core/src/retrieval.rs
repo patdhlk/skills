@@ -238,8 +238,9 @@ fn hits_payload(hits: &[Hit<'_>]) -> Value {
 }
 
 /// `pds search`: rank all need types against the query from a fresh corpus.
-/// Pure ranking — no threshold, always a clean outcome (exit 0); exit 2 is
-/// reserved for tool/config errors, including an empty query.
+/// Pure ranking — no verdict gate, so zero hits is still a clean outcome
+/// (exit 0). A failed build passes through as exit 1; tool/config errors
+/// (including an empty query) are exit 2.
 pub fn run_search(config: &Config, project_root: &Path, query: &str) -> Result<Outcome, Error> {
     if query.trim().is_empty() {
         return Err(Error::Config {

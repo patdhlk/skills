@@ -32,7 +32,7 @@ enum Commands {
     Status,
     /// Report the next actionable (ready-for-agent) issue.
     Next,
-    /// Rank needs by similarity to a query (always exit 0).
+    /// Rank needs by relevance to a query; exit 0 even with zero hits (1 = build failure, 2 = config/tool error).
     Search {
         /// The query text.
         query: String,

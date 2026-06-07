@@ -9,12 +9,15 @@
 //! [`run_verdict_check`] orchestrates build → load → check.
 
 use std::collections::HashMap;
+use std::path::Path;
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
-use crate::config::VerdictsConfig;
+use crate::builder::run_build;
+use crate::config::{Config, VerdictsConfig};
+use crate::error::Error;
 use crate::needs::{Need, NeedsCorpus};
-use crate::outcome::finding;
+use crate::outcome::{Outcome, finding};
 use sha2::{Digest, Sha256};
 
 /// Content fingerprint for staleness detection (ADR_0015, pinned in the
@@ -264,6 +267,59 @@ pub fn verdict_check_corpus(
             .then_with(|| a.message.cmp(&b.message))
     });
     findings
+}
+
+/// Resolve the directive the `verdict` role maps to, or a config error.
+/// Only called when the verdicts table is present.
+pub(crate) fn verdict_directive(config: &Config) -> Result<&str, Error> {
+    config
+        .roles
+        .get("verdict")
+        .map(String::as_str)
+        .ok_or_else(|| Error::Config {
+            message: "role \"verdict\" is not defined in [tool.patdhlk-skills.roles]; \
+                      `pds verdict-check` requires it when [tool.patdhlk-skills.verdicts] \
+                      is configured"
+                .to_string(),
+        })
+}
+
+/// `pds verdict-check`: fresh build, then the four-bucket check. Absent
+/// verdicts table ⇒ clean no-op without building (the lint activation model).
+pub fn run_verdict_check(config: &Config, project_root: &Path) -> Result<Outcome, Error> {
+    let Some(verdicts) = config.verdicts.as_ref() else {
+        let mut payload = Map::new();
+        payload.insert("findings".to_string(), Value::Array(Vec::new()));
+        return Ok(Outcome::clean(payload));
+    };
+    let directive = verdict_directive(config)?.to_string();
+
+    let build = run_build(config, project_root)?;
+    if build.is_failed() {
+        return Ok(build);
+    }
+    let corpus = NeedsCorpus::load(&config.needs_json)?;
+
+    let findings = verdict_check_corpus(
+        &corpus,
+        verdicts,
+        &config.rubrics,
+        &directive,
+        &config.exempt_statuses,
+    );
+    let arr: Vec<Value> = findings.iter().map(finding_json).collect();
+    let failed = !arr.is_empty();
+    let mut payload = Map::new();
+    payload.insert("findings".to_string(), Value::Array(arr));
+    payload.insert(
+        "needs_json".to_string(),
+        Value::String(config.needs_json.to_string_lossy().into_owned()),
+    );
+    if failed {
+        Ok(Outcome::failed(payload))
+    } else {
+        Ok(Outcome::clean(payload))
+    }
 }
 
 /// A non-null string extra, `None` when absent or JSON null.

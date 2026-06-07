@@ -25,4 +25,4 @@ pub use queries::{next_issue, run_next, run_status, status_counts};
 pub use retrieval::{
     DEFAULT_THRESHOLD, Hit, Index, dedup_verdict, run_dedup, run_search, tokenize,
 };
-pub use verdicts::{Bucket, VerdictFinding, fingerprint, verdict_check_corpus};
+pub use verdicts::{Bucket, VerdictFinding, fingerprint, run_verdict_check, verdict_check_corpus};

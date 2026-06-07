@@ -1389,6 +1389,228 @@ fn dedup_github_backend_is_tool_error() {
     assert_eq!(json["error"]["kind"], "tool");
 }
 
+// ---------------------------------------------------------------------------
+// `pds verdict-check` E2E — verdict gate (unix-only: fake builders).
+// ---------------------------------------------------------------------------
+
+/// Write a fake sphinx-build whose needs.json contains one ready-for-agent
+/// issue plus (optionally) a verdict need with the given fields JSON.
+/// Returns (tempdir, config_path). The config declares issue+verdict types,
+/// the verdict role, a triage rubric, and the require/statuses tables.
+#[cfg(unix)]
+fn verdict_project(verdict_fields: Option<&str>) -> (tempfile::TempDir, std::path::PathBuf) {
+    let verdict = match verdict_fields {
+        Some(fields) => format!(
+            r#","VERDICT_ISSUE_0001": {{"id":"VERDICT_ISSUE_0001","type":"verdict","title":"v",{fields}}}"#
+        ),
+        None => String::new(),
+    };
+    let needs = format!(
+        r#"{{"current_version":"","project":"t","versions":{{"":{{"needs":{{
+            "ISSUE_0001": {{"id":"ISSUE_0001","type":"issue","title":"the title","status":"ready-for-agent","content":"the body"}}{verdict}
+        }}}}}}}}"#
+    );
+    let script_body = format!(
+        "#!/bin/sh\noutdir=\"$(eval echo \\${{$#}})\"\nmkdir -p \"$outdir\"\ncat > \"$outdir/needs.json\" <<'JSON'\n{needs}\nJSON\nexit 0\n"
+    );
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let script = root.join("fake-sphinx.sh");
+    write_script(&script, &script_body);
+    std::fs::create_dir_all(root.join("spec")).unwrap();
+    let config = root.join("ubproject.toml");
+    let toml = format!(
+        "[[needs.types]]\ndirective = \"issue\"\n\n\
+         [[needs.types]]\ndirective = \"verdict\"\n\n\
+         [tool.patdhlk-skills]\nbuilder = \"sphinx-build\"\nspec_dir = \"spec\"\n\n\
+         [tool.patdhlk-skills.gate]\nsphinx_command = [\"{}\"]\n\n\
+         [tool.patdhlk-skills.roles]\nissue = \"issue\"\nverdict = \"verdict\"\n\n\
+         [tool.patdhlk-skills.rubrics.triage]\naxes = [\"category\", \"state\"]\n\n\
+         [tool.patdhlk-skills.verdicts]\nrequire = {{ issue = \"triage\" }}\n\
+         statuses = [\"ready-for-agent\"]\n",
+        script.display()
+    );
+    std::fs::write(&config, toml).unwrap();
+    (tmp, config)
+}
+
+#[cfg(unix)]
+#[test]
+fn verdict_check_missing_exits_one() {
+    let (_tmp, config) = verdict_project(None);
+
+    let assert = pds()
+        .arg("verdict-check")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.failure().code(1).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).expect("stdout is one JSON object");
+    assert_eq!(json["schema"], 1);
+    assert_eq!(json["verb"], "verdict-check");
+    let findings = json["findings"].as_array().expect("findings array");
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0]["check"], "verdict:missing");
+    assert_eq!(findings[0]["need"], "ISSUE_0001");
+}
+
+#[cfg(unix)]
+#[test]
+fn verdict_check_passing_fresh_verdict_exits_zero() {
+    let fp = pds_core::fingerprint("the title", "the body");
+    let fields = format!(r#""rubric":"triage","axes_failed":"","fingerprint":"{fp}""#);
+    let (_tmp, config) = verdict_project(Some(&fields));
+
+    let assert = pds()
+        .arg("verdict-check")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.success().code(0).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["verb"], "verdict-check");
+    assert!(json["findings"].as_array().unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn verdict_check_stale_message_carries_recomputed_fingerprint() {
+    let fields = r#""rubric":"triage","axes_failed":"","fingerprint":"sha256:0000000000000000""#;
+    let (_tmp, config) = verdict_project(Some(fields));
+
+    let assert = pds()
+        .arg("verdict-check")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.failure().code(1).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let findings = json["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0]["check"], "verdict:stale");
+    let expected = pds_core::fingerprint("the title", "the body");
+    assert!(
+        findings[0]["message"].as_str().unwrap().contains(&expected),
+        "stale message must carry the recomputed fingerprint"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn verdict_check_malformed_names_the_verdict() {
+    let fp = pds_core::fingerprint("the title", "the body");
+    let fields = format!(r#""rubric":"triage","axes_failed":"vibes","fingerprint":"{fp}""#);
+    let (_tmp, config) = verdict_project(Some(&fields));
+
+    let assert = pds()
+        .arg("verdict-check")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.failure().code(1).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let findings = json["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0]["check"], "verdict:malformed");
+    assert_eq!(findings[0]["need"], "VERDICT_ISSUE_0001");
+}
+
+#[cfg(unix)]
+#[test]
+fn verdict_check_without_table_is_clean_and_does_not_build() {
+    // No verdicts table: clean exit 0, and the builder must NOT run.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let script = root.join("fake-sphinx.sh");
+    write_script(
+        &script,
+        "#!/bin/sh\ntouch \"$(dirname \"$0\")/built.marker\"\nexit 0\n",
+    );
+    std::fs::create_dir_all(root.join("spec")).unwrap();
+    let config = root.join("ubproject.toml");
+    let toml = format!(
+        "[tool.patdhlk-skills]\nbuilder = \"sphinx-build\"\nspec_dir = \"spec\"\n\n\
+         [tool.patdhlk-skills.gate]\nsphinx_command = [\"{}\"]\n",
+        script.display()
+    );
+    std::fs::write(&config, toml).unwrap();
+
+    let assert = pds()
+        .arg("verdict-check")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.success().code(0).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["verb"], "verdict-check");
+    assert!(json["findings"].as_array().unwrap().is_empty());
+    assert!(
+        !root.join("built.marker").exists(),
+        "no verdicts table must mean no build"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn verdict_check_missing_verdict_role_is_config_error() {
+    // verdicts table present but the role map has no `verdict` entry.
+    let (_tmp, config) = verdict_project(None);
+    let toml = std::fs::read_to_string(&config).unwrap();
+    let toml = toml.replace("verdict = \"verdict\"\n", "");
+    std::fs::write(&config, toml).unwrap();
+
+    let assert = pds()
+        .arg("verdict-check")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.failure().code(2).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["verb"], "verdict-check");
+    assert_eq!(json["error"]["kind"], "config");
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("verdict")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn verdict_check_undeclared_rubric_in_require_is_config_error() {
+    let (_tmp, config) = verdict_project(None);
+    let toml = std::fs::read_to_string(&config).unwrap();
+    let toml = toml.replace(
+        "require = { issue = \"triage\" }",
+        "require = { issue = \"missing-rubric\" }",
+    );
+    std::fs::write(&config, toml).unwrap();
+
+    let assert = pds()
+        .arg("verdict-check")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.failure().code(2).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["error"]["kind"], "config");
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("missing-rubric")
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn dedup_build_failure_surfaces_findings_under_dedup_verb() {

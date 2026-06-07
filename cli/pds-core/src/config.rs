@@ -792,7 +792,9 @@ fn validate_rubrics(
         return Ok(HashMap::new());
     };
     let mut rubrics: HashMap<String, Vec<String>> = HashMap::new();
-    for (name, rubric) in raw {
+    let mut entries: Vec<(String, RawRubric)> = raw.into_iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    for (name, rubric) in entries {
         let axes = rubric.axes.unwrap_or_default();
         if axes.is_empty() {
             return Err(Error::Config {
@@ -818,8 +820,13 @@ fn validate_rubrics(
 }
 
 /// Validate `[tool.patdhlk-skills.verdicts]` against declared directives and
-/// declared rubrics (ADR_0016: a require entry naming an undeclared rubric is
-/// a config hard error).
+/// declared rubrics (ADR_0016).  Both checks are hard errors:
+/// - keys in `require` must match a directive declared in `[[needs.types]]`;
+/// - values in `require` must name a rubric declared in
+///   `[tool.patdhlk-skills.rubrics.*]`.
+///
+/// All offenders from both checks are collected and reported in a single
+/// message; type-drift is reported before rubric-drift when both are present.
 fn validate_verdicts(
     raw: RawVerdicts,
     declared_directives: &HashSet<String>,
@@ -835,23 +842,34 @@ fn validate_verdicts(
     }
     let mut entries: Vec<(&String, &String)> = require.iter().collect();
     entries.sort();
-    for (need_type, rubric) in entries {
-        if !declared_directives.contains(need_type) {
-            return Err(Error::Config {
-                message: format!(
-                    "verdicts.require references undeclared [[needs.types]] \
-                     directive {need_type:?}"
-                ),
-            });
+    let mut undeclared_types: Vec<String> = Vec::new();
+    let mut undeclared_rubrics: Vec<String> = Vec::new();
+    for (need_type, rubric) in &entries {
+        if !declared_directives.contains(*need_type) {
+            undeclared_types.push(need_type.to_string());
         }
-        if !rubrics.contains_key(rubric) {
-            return Err(Error::Config {
-                message: format!(
-                    "verdicts.require[{need_type:?}] names undeclared rubric \
-                     {rubric:?}; declare [tool.patdhlk-skills.rubrics.{rubric}]"
-                ),
-            });
+        if !rubrics.contains_key(*rubric) {
+            undeclared_rubrics.push(format!("{need_type} -> {rubric:?}"));
         }
+    }
+    if !undeclared_types.is_empty() {
+        undeclared_types.sort();
+        return Err(Error::Config {
+            message: format!(
+                "verdicts.require references undeclared [[needs.types]] directives: {}",
+                undeclared_types.join(", ")
+            ),
+        });
+    }
+    if !undeclared_rubrics.is_empty() {
+        undeclared_rubrics.sort();
+        return Err(Error::Config {
+            message: format!(
+                "verdicts.require names undeclared rubrics: {}; \
+                 declare [tool.patdhlk-skills.rubrics.<name>]",
+                undeclared_rubrics.join(", ")
+            ),
+        });
     }
     if let Some(ref statuses) = raw.statuses {
         if statuses.is_empty() {
@@ -2362,10 +2380,13 @@ axes = ["category", "category"]
 axes = ["category", ""]
 "#;
         let (_tmp, project) = make_project(toml);
-        assert!(matches!(
-            Config::load(&project).unwrap_err(),
-            Error::Config { .. }
-        ));
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        assert!(
+            err.to_string().contains("empty string"),
+            "must mention 'empty string', got: {}",
+            err
+        );
     }
 
     #[test]

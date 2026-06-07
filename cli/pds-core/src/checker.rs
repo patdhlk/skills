@@ -117,16 +117,34 @@ pub fn run_check(config: &Config, project_root: &Path) -> Result<Outcome, Error>
         });
     }
 
-    // Lint runs only AFTER the builder gate succeeds and produces a corpus. If
-    // any builder step failed the corpus is suspect, so lint is skipped and the
-    // builder findings are returned as today. With a clean build and an enabled
-    // lint table, lint runs on the just-built needs.json (no second build) and
-    // its findings are appended to the same array.
-    if findings.is_empty() && any_rule_enabled(config.lint.as_ref()) {
+    // Lint and verdict-check run only AFTER the builder gate succeeds and
+    // produces a corpus. If any builder step failed the corpus is suspect, so
+    // both stages are skipped and the builder findings are returned as-is.
+    // Both stages use builder_clean to run independently: lint findings and
+    // verdict findings can coexist in the same array.
+    let builder_clean = findings.is_empty();
+    if builder_clean && any_rule_enabled(config.lint.as_ref()) {
         let corpus = NeedsCorpus::load(&config.needs_json)?;
         let lint = config.lint.as_ref().expect("any_rule_enabled implies Some");
-        let lint_findings = lint_corpus(&corpus, lint, &config.exempt_statuses);
+        let lint_findings = lint_corpus(
+            &corpus,
+            lint,
+            &config.exempt_statuses,
+            config.roles.get("verdict").map(String::as_str),
+        );
         findings.extend(lint_findings.iter().map(finding_json));
+    }
+    if builder_clean && let Some(verdicts) = config.verdicts.as_ref() {
+        let directive = crate::verdicts::verdict_directive(config)?.to_string();
+        let corpus = NeedsCorpus::load(&config.needs_json)?;
+        let vfindings = crate::verdicts::verdict_check_corpus(
+            &corpus,
+            verdicts,
+            &config.rubrics,
+            &directive,
+            &config.exempt_statuses,
+        );
+        findings.extend(vfindings.iter().map(crate::verdicts::finding_json));
     }
 
     let mut payload = Map::new();

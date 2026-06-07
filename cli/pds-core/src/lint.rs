@@ -109,12 +109,17 @@ const ENUMERATION_CUES: &[&str] = &[
 
 /// Apply every enabled rule in `lint` to every non-exempt need in `corpus`.
 ///
+/// `verdict_directive`, when `Some`, is the directive name that verdict needs
+/// carry (e.g. `"verdict"`). Needs of that type are exempt from lint by type
+/// (ADR_0015) — they are never flagged, even if a rule targets their directive.
+///
 /// See the module docs for the per-need flow, the rule semantics, and the
 /// deterministic ordering guarantee.
 pub fn lint_corpus(
     corpus: &NeedsCorpus,
     lint: &LintConfig,
     exempt_statuses: &[String],
+    verdict_directive: Option<&str>,
 ) -> Vec<LintFinding> {
     let mut findings: Vec<LintFinding> = Vec::new();
 
@@ -124,6 +129,11 @@ pub fn lint_corpus(
         if let Some(status) = need.status.as_deref()
             && exempt_statuses.iter().any(|s| s == status)
         {
+            continue;
+        }
+
+        // Verdicts are exempt from lint by type (ADR_0015).
+        if verdict_directive.is_some_and(|d| d == need.need_type) {
             continue;
         }
 
@@ -224,7 +234,12 @@ pub fn run_lint(config: &Config, project_root: &Path) -> Result<Outcome, Error> 
     }
     let corpus = NeedsCorpus::load(&config.needs_json)?;
 
-    let findings = lint_corpus(&corpus, lint, &config.exempt_statuses);
+    let findings = lint_corpus(
+        &corpus,
+        lint,
+        &config.exempt_statuses,
+        config.roles.get("verdict").map(String::as_str),
+    );
     Ok(lint_outcome(findings, &config.needs_json))
 }
 
@@ -529,7 +544,7 @@ mod tests {
             required_sections: Some(rs),
             ..empty_lint()
         };
-        let findings = lint_corpus(&corpus, &lint, &no_exempt());
+        let findings = lint_corpus(&corpus, &lint, &no_exempt(), None);
         // Context present; Decision + Consequences missing.
         assert_eq!(findings.len(), 2);
         assert!(findings.iter().all(|f| f.rule == RULE_REQUIRED_SECTIONS));
@@ -556,7 +571,7 @@ mod tests {
             required_sections: Some(rs),
             ..empty_lint()
         };
-        let findings = lint_corpus(&corpus, &lint, &no_exempt());
+        let findings = lint_corpus(&corpus, &lint, &no_exempt(), None);
         assert!(
             findings.is_empty(),
             "both `**Context.**` and `**Decision**` forms must satisfy, got: {findings:?}"
@@ -573,7 +588,7 @@ mod tests {
             required_sections: Some(rs),
             ..empty_lint()
         };
-        let findings = lint_corpus(&corpus, &lint, &no_exempt());
+        let findings = lint_corpus(&corpus, &lint, &no_exempt(), None);
         assert!(
             findings.is_empty(),
             "issue is not targeted, got: {findings:?}"
@@ -599,7 +614,7 @@ mod tests {
             body_length: Some(bl),
             ..empty_lint()
         };
-        let findings = lint_corpus(&corpus, &lint, &no_exempt());
+        let findings = lint_corpus(&corpus, &lint, &no_exempt(), None);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].rule, RULE_BODY_LENGTH);
         assert!(findings[0].message.contains("too short"));
@@ -623,7 +638,7 @@ mod tests {
             body_length: Some(bl),
             ..empty_lint()
         };
-        let findings = lint_corpus(&corpus, &lint, &no_exempt());
+        let findings = lint_corpus(&corpus, &lint, &no_exempt(), None);
         assert_eq!(findings.len(), 1);
         assert!(findings[0].message.contains("too long"));
         assert!(findings[0].message.contains("20"));
@@ -646,7 +661,7 @@ mod tests {
             body_length: Some(bl),
             ..empty_lint()
         };
-        assert!(lint_corpus(&corpus, &lint, &no_exempt()).is_empty());
+        assert!(lint_corpus(&corpus, &lint, &no_exempt(), None).is_empty());
     }
 
     #[test]
@@ -665,7 +680,7 @@ mod tests {
             body_length: Some(bl),
             ..empty_lint()
         };
-        let findings = lint_corpus(&corpus, &lint, &no_exempt());
+        let findings = lint_corpus(&corpus, &lint, &no_exempt(), None);
         assert_eq!(findings.len(), 1, "5 chars < 6 must fire");
         assert!(
             findings[0].message.contains('5'),
@@ -697,7 +712,7 @@ mod tests {
             "The system shall be robust.",
         ));
         let lint = weasel_lint(&["robust"], &["req"]);
-        let findings = lint_corpus(&corpus, &lint, &no_exempt());
+        let findings = lint_corpus(&corpus, &lint, &no_exempt(), None);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].rule, RULE_WEASEL_WORDS);
         assert!(findings[0].message.contains("robust"));
@@ -713,7 +728,7 @@ mod tests {
         ));
         let lint = weasel_lint(&["robust"], &["req"]);
         assert!(
-            lint_corpus(&corpus, &lint, &no_exempt()).is_empty(),
+            lint_corpus(&corpus, &lint, &no_exempt(), None).is_empty(),
             "digit in sentence exempts the weasel word"
         );
     }
@@ -728,7 +743,7 @@ mod tests {
         ));
         let lint = weasel_lint(&["appropriate"], &["req"]);
         assert!(
-            lint_corpus(&corpus, &lint, &no_exempt()).is_empty(),
+            lint_corpus(&corpus, &lint, &no_exempt(), None).is_empty(),
             "\"at least\" cue exempts the weasel word"
         );
     }
@@ -738,11 +753,11 @@ mod tests {
         // "Robust" capitalised must still fire; "robustness" must NOT (not whole word).
         let corpus = corpus_from(&one_need("REQ_0001", "req", None, "Robust design."));
         let lint = weasel_lint(&["robust"], &["req"]);
-        assert_eq!(lint_corpus(&corpus, &lint, &no_exempt()).len(), 1);
+        assert_eq!(lint_corpus(&corpus, &lint, &no_exempt(), None).len(), 1);
 
         let corpus2 = corpus_from(&one_need("REQ_0001", "req", None, "Robustness matters."));
         assert!(
-            lint_corpus(&corpus2, &lint, &no_exempt()).is_empty(),
+            lint_corpus(&corpus2, &lint, &no_exempt(), None).is_empty(),
             "substring inside a longer word must not match"
         );
     }
@@ -757,7 +772,7 @@ mod tests {
         ));
         let lint = weasel_lint(&["robust"], &["req"]);
         assert_eq!(
-            lint_corpus(&corpus, &lint, &no_exempt()).len(),
+            lint_corpus(&corpus, &lint, &no_exempt(), None).len(),
             1,
             "multiple occurrences of one word yield one finding"
         );
@@ -767,7 +782,7 @@ mod tests {
     fn weasel_word_ignores_non_targeted_directive() {
         let corpus = corpus_from(&one_need("ISSUE_0001", "issue", None, "very robust thing"));
         let lint = weasel_lint(&["robust"], &["req"]);
-        assert!(lint_corpus(&corpus, &lint, &no_exempt()).is_empty());
+        assert!(lint_corpus(&corpus, &lint, &no_exempt(), None).is_empty());
     }
 
     // ------------------------------------------------------------------
@@ -793,7 +808,7 @@ mod tests {
             "All inputs shall be validated.",
         ));
         let lint = quant_lint(&["all"], &["req"]);
-        let findings = lint_corpus(&corpus, &lint, &no_exempt());
+        let findings = lint_corpus(&corpus, &lint, &no_exempt(), None);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].rule, RULE_UNENUMERATED_QUANTIFIERS);
         assert!(findings[0].message.contains("all"));
@@ -809,7 +824,7 @@ mod tests {
         ));
         let lint = quant_lint(&["all"], &["req"]);
         assert!(
-            lint_corpus(&corpus, &lint, &no_exempt()).is_empty(),
+            lint_corpus(&corpus, &lint, &no_exempt(), None).is_empty(),
             "\"of the\" / \"declared\" after the quantifier exempts it"
         );
     }
@@ -825,7 +840,7 @@ mod tests {
         ));
         let lint = quant_lint(&["all"], &["req"]);
         assert_eq!(
-            lint_corpus(&corpus, &lint, &no_exempt()).len(),
+            lint_corpus(&corpus, &lint, &no_exempt(), None).len(),
             1,
             "an enumeration cue in an earlier sentence must not exempt the quantifier"
         );
@@ -836,10 +851,10 @@ mod tests {
         // "each" capitalised fires; "reach" must not match.
         let corpus = corpus_from(&one_need("REQ_0001", "req", None, "Each module logs."));
         let lint = quant_lint(&["each"], &["req"]);
-        assert_eq!(lint_corpus(&corpus, &lint, &no_exempt()).len(), 1);
+        assert_eq!(lint_corpus(&corpus, &lint, &no_exempt(), None).len(), 1);
 
         let corpus2 = corpus_from(&one_need("REQ_0001", "req", None, "Reach the goal."));
-        assert!(lint_corpus(&corpus2, &lint, &no_exempt()).is_empty());
+        assert!(lint_corpus(&corpus2, &lint, &no_exempt(), None).is_empty());
     }
 
     #[test]
@@ -851,7 +866,7 @@ mod tests {
             "All this. All that. All other.",
         ));
         let lint = quant_lint(&["all"], &["req"]);
-        assert_eq!(lint_corpus(&corpus, &lint, &no_exempt()).len(), 1);
+        assert_eq!(lint_corpus(&corpus, &lint, &no_exempt(), None).len(), 1);
     }
 
     /// Two occurrences of a quantifier in one sentence: the second has an
@@ -868,7 +883,7 @@ mod tests {
             "All inputs shall be valid and all of the outputs shall be logged.",
         ));
         let lint = quant_lint(&["all"], &["req"]);
-        let findings = lint_corpus(&corpus, &lint, &no_exempt());
+        let findings = lint_corpus(&corpus, &lint, &no_exempt(), None);
         assert_eq!(
             findings.len(),
             1,
@@ -889,7 +904,7 @@ mod tests {
         ));
         let lint = quant_lint(&["all"], &["req"]);
         assert!(
-            lint_corpus(&corpus, &lint, &no_exempt()).is_empty(),
+            lint_corpus(&corpus, &lint, &no_exempt(), None).is_empty(),
             "both occurrences have enumeration cues; must not fire"
         );
     }
@@ -908,7 +923,7 @@ mod tests {
         ));
         let lint = weasel_lint(&["robust"], &["req"]);
         assert!(
-            lint_corpus(&corpus, &lint, &["done".to_string()]).is_empty(),
+            lint_corpus(&corpus, &lint, &["done".to_string()], None).is_empty(),
             "a done need is exempt from all rules"
         );
     }
@@ -918,10 +933,40 @@ mod tests {
         let corpus = corpus_from(&one_need("REQ_0001", "req", None, "Be robust."));
         let lint = weasel_lint(&["robust"], &["req"]);
         assert_eq!(
-            lint_corpus(&corpus, &lint, &["done".to_string(), "wontfix".to_string()]).len(),
+            lint_corpus(
+                &corpus,
+                &lint,
+                &["done".to_string(), "wontfix".to_string()],
+                None
+            )
+            .len(),
             1,
             "absence of a status must NOT be treated as exempt"
         );
+    }
+
+    #[test]
+    fn verdict_typed_needs_are_skipped_by_lint() {
+        // A verdict need whose body would violate a rule targeting its
+        // directive is still skipped: verdicts are exempt from lint
+        // (ADR_0015), by type, not by configuration discipline.
+        let corpus = corpus_from(
+            r#"{"current_version":"","project":"t","versions":{"":{"needs":{
+            "VERDICT_ISSUE_0001": {"id":"VERDICT_ISSUE_0001","type":"verdict",
+                "title":"v","content":"All inputs shall be robust."}
+        }}}}"#,
+        );
+        let lint = LintConfig {
+            required_sections: None,
+            body_length: None,
+            weasel_words: Some(LintWeaselWords {
+                words: vec!["robust".to_string()],
+                directives: vec!["verdict".to_string()],
+            }),
+            unenumerated_quantifiers: None,
+        };
+        let findings = lint_corpus(&corpus, &lint, &no_exempt(), Some("verdict"));
+        assert!(findings.is_empty(), "verdict needs must be lint-exempt");
     }
 
     #[test]
@@ -947,7 +992,7 @@ mod tests {
             }),
             ..empty_lint()
         };
-        let findings = lint_corpus(&corpus, &lint, &no_exempt());
+        let findings = lint_corpus(&corpus, &lint, &no_exempt(), None);
         assert_eq!(findings.len(), 4);
         // REQ_0001 before REQ_0002; within each, rule order is alphabetical:
         // "lint:unenumerated-quantifiers" > "lint:weasel-words"? compare strings.

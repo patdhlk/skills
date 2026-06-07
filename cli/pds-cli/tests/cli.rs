@@ -1634,6 +1634,78 @@ fn verdict_check_undeclared_rubric_in_require_is_config_error() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// `pds check` verdict-integration E2E — Task 5 (unix-only: fake builders).
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+#[test]
+fn check_with_verdicts_table_appends_verdict_findings() {
+    // Clean builder, no lint table, missing verdict ⇒ pds check exits 1 with
+    // the verdict finding in the one findings array.
+    let (_tmp, config) = verdict_project(None);
+
+    let assert = pds().arg("check").arg("--config").arg(&config).assert();
+    let out = assert.failure().code(1).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).expect("stdout is one JSON object");
+    assert_eq!(json["verb"], "check");
+    let findings = json["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0]["check"], "verdict:missing");
+}
+
+#[cfg(unix)]
+#[test]
+fn check_clean_when_verdict_passes_and_fresh() {
+    let fp = pds_core::fingerprint("the title", "the body");
+    let fields = format!(r#""rubric":"triage","axes_failed":"","fingerprint":"{fp}""#);
+    let (_tmp, config) = verdict_project(Some(&fields));
+
+    let assert = pds().arg("check").arg("--config").arg(&config).assert();
+    let out = assert.success().code(0).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(json["findings"].as_array().unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn check_builder_failure_skips_verdict_check() {
+    // Failing builder ⇒ only the build finding; verdict-check must not run.
+    let (_tmp, config) = verdict_project(None);
+    // Point the config's sphinx_command at a failing script.
+    let toml = std::fs::read_to_string(&config).unwrap();
+    let root = std::path::Path::new(&config)
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let fail = root.join("fail-sphinx.sh");
+    write_script(&fail, FAKE_SPHINX_FAIL);
+    let toml = {
+        // Replace the sphinx_command line wholesale.
+        let mut out = String::new();
+        for line in toml.lines() {
+            if line.starts_with("sphinx_command = ") {
+                out.push_str(&format!("sphinx_command = [\"{}\"]\n", fail.display()));
+            } else {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        out
+    };
+    std::fs::write(&config, toml).unwrap();
+
+    let assert = pds().arg("check").arg("--config").arg(&config).assert();
+    let out = assert.failure().code(1).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let findings = json["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0]["check"], "build");
+}
+
 #[cfg(unix)]
 #[test]
 fn dedup_build_failure_surfaces_findings_under_dedup_verb() {

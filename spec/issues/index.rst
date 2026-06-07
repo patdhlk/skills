@@ -319,9 +319,14 @@ The dogfooded backlog (:need:`ADR_0012`): every v1 skill port is an
      need. Status-less.
    - **Fingerprint** (exact, pin in code and tests):
      ``sha256:`` + first 16 lowercase hex of SHA-256 over UTF-8 of
-     ``title + "\n" + content`` (both from needs.json) after
-     collapsing every whitespace run to one space and trimming.
-     RST reflow must not invalidate; any word change must.
+     ``normalize(title) + "\n" + normalize(content)`` (both from
+     needs.json), where ``normalize`` collapses every whitespace run
+     to one space and trims — applied to each field *separately*, so
+     the ``"\n"`` separator survives and a word migrating across the
+     title/body boundary invalidates (amended during implementation
+     review: joint normalization dissolved the boundary for
+     multi-word titles). RST reflow must not invalidate; any word
+     change must.
    - **``pds verdict-check``**: shared preamble (fresh build, load),
      then four buckets as findings (:need:`ADR_0019`), all gating
      (exit 1): ``verdict:missing`` (need's type in ``require``,

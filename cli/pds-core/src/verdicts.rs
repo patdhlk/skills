@@ -12,13 +12,16 @@ use sha2::{Digest, Sha256};
 
 /// Content fingerprint for staleness detection (ADR_0015, pinned in the
 /// ISSUE_0014 brief): `"sha256:" + first 16 lowercase hex` of SHA-256 over
-/// the UTF-8 of `title + "\n" + content`, after collapsing every whitespace
-/// run to a single space and trimming. Whitespace-only edits (RST reflow)
-/// never invalidate; any word change does. Directive options (status, links)
-/// never enter the hash.
+/// the UTF-8 of `norm(title) + "\n" + norm(content)`, where `norm` collapses
+/// every whitespace run to a single space and trims. Each field is normalized
+/// **separately** before joining, so the `"\n"` separator survives in the
+/// hashed string — a word migrating across the title/body boundary
+/// invalidates the fingerprint. Whitespace-only edits (RST reflow) within a
+/// field never invalidate; any word change does. Directive options (status,
+/// links) never enter the hash.
 pub fn fingerprint(title: &str, content: &str) -> String {
-    let joined = format!("{title}\n{content}");
-    let normalized = joined.split_whitespace().collect::<Vec<_>>().join(" ");
+    let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized = format!("{}\n{}", norm(title), norm(content));
     let digest = Sha256::digest(normalized.as_bytes());
     let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
     format!("sha256:{}", &hex[..16])
@@ -69,9 +72,11 @@ mod tests {
 
     #[test]
     fn title_body_boundary_is_unambiguous() {
-        // "ab" + "c" must differ from "a" + "bc" (the "\n" separator, which
-        // then collapses to a space — but only AFTER joining).
+        // Single-token boundary…
         assert_ne!(fingerprint("ab", "c"), fingerprint("a", "bc"));
+        // …and the case joint normalization got wrong: a word migrating
+        // across the boundary of a multi-word title must invalidate.
+        assert_ne!(fingerprint("a b", "c"), fingerprint("a", "b c"));
     }
 
     #[test]

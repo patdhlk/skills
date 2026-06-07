@@ -74,11 +74,14 @@ mention the `cargo install pds-cli` fallback. The raw `sphinx-build` /
 - **Makefile**: `html` / `strict` / `needs` / `serve` / `clean` targets
   (REFERENCE.md §8) — if a Makefile exists, offer to append the targets.
 - **pds config tables**: offer to scaffold `[tool.patdhlk-skills.gate]`
-  (optional `needs_json` / `sphinx_command` keys; REFERENCE.md §9) and the
-  forward-looking `lint` / `rubrics` / `verdicts` tables plus the `verdict`
-  type and role-map entry (REFERENCE.md §10). An absent table simply means
-  `pds check` runs with its defaults (ADR_0014) — never add a table the
-  user declines.
+  (optional `needs_json` / `sphinx_command` / `exempt_statuses` keys;
+  REFERENCE.md §9) and the `[tool.patdhlk-skills.lint]` table (shipped;
+  REFERENCE.md §9a) — rules `required_sections`, `nontrivial_body`,
+  `max_body_length`, `weasel_words`, `unenumerated_quantifiers`; `pds check`
+  runs lint automatically when the table is present. Also the forward-looking
+  `rubrics` / `verdicts` tables plus the `verdict` type and role-map entry
+  (REFERENCE.md §10). An absent table simply means that feature is off
+  (ADR_0014) — never add a table the user declines.
 
 ### 7. Validate and report
 

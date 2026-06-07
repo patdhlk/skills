@@ -110,3 +110,22 @@ requirement = "req"
 decision = "arch-decision"
 term = "term"
 test = "test"
+
+# Lint rules (pds lint / pds check): enforce structural norms on active needs.
+# Needs whose status is in gate.exempt_statuses (default: done, wontfix) are
+# skipped by all rules; a need with NO status is never exempt.
+#
+# weasel_words and unenumerated_quantifiers are NOT enabled here: this repo has
+# no active `req` directives in the corpus (confirmed by `jq` on needs.json),
+# and the issue/arch-decision bodies are narrative rather than formal
+# requirements, so precision-language rules would generate noise.
+
+[tool.patdhlk-skills.lint.required_sections]
+# Every arch-decision must have the three canonical bold lead-ins.
+# Accepts both `**Section.**` and `**Section**` forms.
+arch-decision = ["Context", "Decision", "Consequences"]
+
+[tool.patdhlk-skills.lint.nontrivial_body]
+# Shortest non-exempt issue body in the current corpus: ISSUE_0018 at 539 chars.
+# Threshold set to 200 — well below half of the shortest — giving ~2.7× headroom.
+issue = 200

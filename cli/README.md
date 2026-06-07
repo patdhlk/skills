@@ -122,7 +122,22 @@ for the full schema reference.
 [tool.patdhlk-skills]
 builder  = "ubc"        # "ubc" or "sphinx-build"
 spec_dir = "spec"
+
+[tool.patdhlk-skills.gate]
+# exempt_statuses = ["done", "wontfix"]  # default; skipped by lint and future checks
+
+[tool.patdhlk-skills.lint.required_sections]
+# Directive name must appear in [[needs.types]]; both **Section.** and **Section** accepted.
+arch-decision = ["Context", "Decision", "Consequences"]
+
+[tool.patdhlk-skills.lint.nontrivial_body]
+# Minimum body length in characters (> 0); pair with max_body_length for a ceiling.
+issue = 200
 ```
+
+All lint rule keys (`required_sections`, `nontrivial_body`, `max_body_length`,
+`weasel_words`, `unenumerated_quantifiers`) are optional — an absent key means
+that rule is off. `pds check` runs lint automatically when the table is present.
 
 ## Releasing
 

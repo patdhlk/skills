@@ -46,13 +46,13 @@
 
 use std::path::Path;
 
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 use crate::builder::run_build;
 use crate::config::{Config, LintBodyLength, LintConfig};
 use crate::error::Error;
 use crate::needs::{Need, NeedsCorpus};
-use crate::outcome::Outcome;
+use crate::outcome::{self, Outcome};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -182,14 +182,15 @@ pub fn any_rule_enabled(lint: Option<&LintConfig>) -> bool {
 
 /// Serialise a [`LintFinding`] into the shared finding envelope:
 /// `{"check": "lint:<rule>", "severity": "error", "need": "<ID>", "message": …}`.
-/// This is the per-step finding shape with `need` finally populated.
+///
+/// Delegates to [`crate::outcome::finding`] — the shared envelope constructor.
 pub fn finding_json(finding: &LintFinding) -> Value {
-    json!({
-        "check": finding.rule,
-        "severity": "error",
-        "need": finding.need,
-        "message": finding.message,
-    })
+    outcome::finding(
+        &finding.rule,
+        "error",
+        Some(&finding.need),
+        &finding.message,
+    )
 }
 
 /// `pds lint`: run the body-lint rules over a fresh corpus.
@@ -328,19 +329,35 @@ fn check_weasel_words(need: &Need, words: &[String], out: &mut Vec<LintFinding>)
 }
 
 /// `lint:unenumerated-quantifiers`: one finding per offending quantifier
-/// (deduped per quantifier). A quantifier offends when it appears as a whole
-/// word and is not followed, in the same sentence after its position, by an
-/// enumeration cue.
+/// (deduped per quantifier). A quantifier offends when ANY whole-word occurrence
+/// of it in a sentence is not followed, between that occurrence and the next
+/// occurrence of the same quantifier (or the sentence end), by an enumeration
+/// cue. Each occurrence is checked against its own inter-occurrence window so
+/// a sentence like "All inputs and all of the outputs" fires for the first
+/// unenumerated "all" even though "of the" appears later in the sentence (it
+/// belongs to the second occurrence's window, not the first's).
 fn check_unenumerated_quantifiers(need: &Need, quantifiers: &[String], out: &mut Vec<LintFinding>) {
     for quantifier in quantifiers {
         let mut offends = false;
-        for sentence in sentences(&need.content) {
-            if let Some(after) = tail_after_whole_word(sentence, quantifier) {
-                if has_enumeration_cue(after) {
-                    continue; // enumerated: a set is stated after the quantifier.
+        'outer: for sentence in sentences(&need.content) {
+            // Collect (start, end) byte-offset pairs for every whole-word
+            // occurrence so we can bound each occurrence's tail to the start
+            // of the next occurrence.
+            let positions: Vec<(usize, usize)> =
+                whole_word_positions_with_start(sentence, quantifier).collect();
+            for (i, (_start, end)) in positions.iter().enumerate() {
+                // Tail: from after this occurrence up to the start of the next
+                // (or sentence end if this is the last occurrence).
+                let tail_end = positions
+                    .get(i + 1)
+                    .map(|(next_start, _)| *next_start)
+                    .unwrap_or(sentence.len());
+                let after = &sentence[*end..tail_end];
+                if !has_enumeration_cue(after) {
+                    offends = true;
+                    break 'outer;
                 }
-                offends = true;
-                break;
+                // This occurrence is enumerated within its window; continue.
             }
         }
         if offends {
@@ -374,23 +391,19 @@ fn contains_whole_word(haystack: &str, word: &str) -> bool {
     whole_word_positions(haystack, word).next().is_some()
 }
 
-/// The slice of `haystack` following the *first* whole-word occurrence of
-/// `word` (case-insensitive). `None` when `word` is absent. Used by the
-/// quantifier rule to scan only what comes after the quantifier.
-fn tail_after_whole_word<'a>(haystack: &'a str, word: &str) -> Option<&'a str> {
-    whole_word_positions(haystack, word)
-        .next()
-        .map(|end| &haystack[end..])
-}
-
-/// Iterate byte offsets of the *end* of each case-insensitive whole-word match
-/// of `word` in `haystack`. A match is a whole word when the characters
-/// immediately before and after it are not alphanumeric.
-fn whole_word_positions<'a>(haystack: &'a str, word: &'a str) -> impl Iterator<Item = usize> + 'a {
+/// Iterate `(start, end)` byte-offset pairs for each case-insensitive
+/// whole-word match of `word` in `haystack`. A match is a whole word when the
+/// characters immediately before and after it are not alphanumeric.
+///
+/// Both `start` and `end` are byte offsets into the *original* `haystack` (not
+/// the lowercased copy). `end - start == word.len()` for ASCII words.
+fn whole_word_positions_with_start(
+    haystack: &str,
+    word: &str,
+) -> impl Iterator<Item = (usize, usize)> {
     let hay_lower = haystack.to_lowercase();
     let word_lower = word.to_lowercase();
-    // Collect into a Vec so the closure owns the lowercased haystack copy.
-    let mut ends: Vec<usize> = Vec::new();
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
     if !word_lower.is_empty() {
         let bytes = hay_lower.as_bytes();
         let wlen = word_lower.len();
@@ -401,16 +414,26 @@ fn whole_word_positions<'a>(haystack: &'a str, word: &'a str) -> impl Iterator<I
             let before_ok = abs == 0 || !is_word_byte(bytes[abs - 1]);
             let after_ok = end >= bytes.len() || !is_word_byte(bytes[end]);
             if before_ok && after_ok {
-                ends.push(end);
+                pairs.push((abs, end));
             }
             start = abs + 1;
         }
     }
-    ends.into_iter()
+    pairs.into_iter()
+}
+
+/// Iterate byte offsets of the *end* of each case-insensitive whole-word match
+/// of `word` in `haystack`. A match is a whole word when the characters
+/// immediately before and after it are not alphanumeric.
+fn whole_word_positions(haystack: &str, word: &str) -> impl Iterator<Item = usize> {
+    whole_word_positions_with_start(haystack, word).map(|(_start, end)| end)
 }
 
 /// A byte counts as part of a word for boundary purposes when it is ASCII
-/// alphanumeric. Non-ASCII bytes are treated as boundaries (conservative).
+/// alphanumeric. Non-ASCII bytes are treated as non-word (boundary) bytes, which
+/// means the matcher can OVER-fire when non-ASCII characters are adjacent to an
+/// ASCII word: for example, `"caféall"` would match `"all"` because `é` (a
+/// multi-byte sequence) is seen as a boundary before `"all"`.
 fn is_word_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric()
 }
@@ -829,6 +852,46 @@ mod tests {
         ));
         let lint = quant_lint(&["all"], &["req"]);
         assert_eq!(lint_corpus(&corpus, &lint, &no_exempt()).len(), 1);
+    }
+
+    /// Two occurrences of a quantifier in one sentence: the second has an
+    /// enumeration cue but the first does not. The rule must still fire because
+    /// the first occurrence is unenumerated (each occurrence is checked
+    /// independently, not just the first).
+    #[test]
+    fn quantifier_fires_when_first_occurrence_has_no_cue_and_second_does() {
+        let corpus = corpus_from(&one_need(
+            "REQ_0001",
+            "req",
+            None,
+            // "all inputs" — no cue; "all of the outputs" — cue ("of the") after second "all".
+            "All inputs shall be valid and all of the outputs shall be logged.",
+        ));
+        let lint = quant_lint(&["all"], &["req"]);
+        let findings = lint_corpus(&corpus, &lint, &no_exempt());
+        assert_eq!(
+            findings.len(),
+            1,
+            "first unenumerated occurrence must fire even though the second has a cue"
+        );
+        assert_eq!(findings[0].rule, RULE_UNENUMERATED_QUANTIFIERS);
+    }
+
+    /// Two occurrences of a quantifier in one sentence where BOTH have an
+    /// enumeration cue: the rule must stay silent.
+    #[test]
+    fn quantifier_quiet_when_all_occurrences_have_cues() {
+        let corpus = corpus_from(&one_need(
+            "REQ_0001",
+            "req",
+            None,
+            "All of the inputs and all of the outputs shall be validated.",
+        ));
+        let lint = quant_lint(&["all"], &["req"]);
+        assert!(
+            lint_corpus(&corpus, &lint, &no_exempt()).is_empty(),
+            "both occurrences have enumeration cues; must not fire"
+        );
     }
 
     // ------------------------------------------------------------------

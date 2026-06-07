@@ -1,4 +1,22 @@
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
+
+/// Construct the shared finding envelope: `{"check", "severity", "need", "message"}`.
+///
+/// This is the single canonical constructor for findings across all verbs:
+/// - `builder` uses it for step failures (need = `None`)
+/// - `lint` uses it for body-lint violations (need = `Some(id)`)
+/// - `checker` verdict checks (ISSUE_0014) will be the third consumer
+///
+/// `severity` is always `"error"` today; the parameter is kept explicit so
+/// callers remain readable and future severity levels need no API change.
+pub fn finding(check: &str, severity: &str, need: Option<&str>, message: &str) -> Value {
+    json!({
+        "check": check,
+        "severity": severity,
+        "need": need.map(|s| Value::String(s.to_owned())).unwrap_or(Value::Null),
+        "message": message,
+    })
+}
 
 /// A successful verb run.
 ///

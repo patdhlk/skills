@@ -18,6 +18,7 @@ use crate::config::{Config, VerdictsConfig};
 use crate::error::Error;
 use crate::needs::{Need, NeedsCorpus};
 use crate::outcome::{Outcome, finding};
+use crate::queries::{CorpusResult, load_fresh_corpus};
 use sha2::{Digest, Sha256};
 
 /// Content fingerprint for staleness detection (ADR_0015, pinned in the
@@ -308,6 +309,27 @@ pub fn run_verdict_check(config: &Config, project_root: &Path) -> Result<Outcome
         &config.exempt_statuses,
     );
     Ok(verdict_outcome(findings, &config.needs_json))
+}
+
+/// `pds fingerprint <id>`: print the ADR_0015 content fingerprint of one need
+/// from a fresh corpus, so a skill can author a verdict without re-deriving
+/// the normalization. Read-only; uses the same [`fingerprint`] the verdict
+/// gate uses. Unknown id → [`Error::Config`] naming it (exit 2).
+pub fn run_fingerprint(config: &Config, project_root: &Path, id: &str) -> Result<Outcome, Error> {
+    let gh_hint = "gh issue view <id> --json title,body";
+    let corpus = match load_fresh_corpus(config, project_root, gh_hint)? {
+        CorpusResult::Ready(c) => c,
+        CorpusResult::BuildFailed(failed) => return Ok(failed),
+    };
+    let need = corpus.get(id).ok_or_else(|| Error::Config {
+        message: format!("no need with id {id:?} in the corpus"),
+    })?;
+    let fp = fingerprint(&need.title, &need.content);
+
+    let mut payload = Map::new();
+    payload.insert("id".to_string(), Value::String(need.id.clone()));
+    payload.insert("fingerprint".to_string(), Value::String(fp));
+    Ok(Outcome::clean(payload))
 }
 
 /// Assemble an [`Outcome`] from verdict findings plus the corpus path. Empty

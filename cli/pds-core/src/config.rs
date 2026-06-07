@@ -431,6 +431,15 @@ fn validate_required_sections(
     map: HashMap<String, Vec<String>>,
     declared_directives: &HashSet<String>,
 ) -> Result<HashMap<String, Vec<String>>, Error> {
+    // An empty outer map is config noise — fail-closed.
+    if map.is_empty() {
+        return Err(Error::Config {
+            message: "lint.required_sections must not be an empty table; \
+                      remove the key or add at least one directive entry"
+                .to_string(),
+        });
+    }
+
     let mut drift: Vec<String> = map
         .keys()
         .filter(|d| !declared_directives.contains(*d))
@@ -455,6 +464,15 @@ fn validate_required_sections(
                 ),
             });
         }
+        // Individual section names may not be empty strings.
+        if let Some(pos) = sections.iter().position(|s| s.is_empty()) {
+            return Err(Error::Config {
+                message: format!(
+                    "lint.required_sections[{directive:?}]: section name at index {pos} \
+                     is an empty string; all section names must be non-empty"
+                ),
+            });
+        }
     }
     Ok(map)
 }
@@ -474,6 +492,26 @@ fn validate_body_length(
 ) -> Result<Option<HashMap<String, LintBodyLength>>, Error> {
     if min_map.is_none() && max_map.is_none() {
         return Ok(None);
+    }
+
+    // Reject empty tables for each supplied key — an empty rule table is config noise.
+    if let Some(ref m) = min_map
+        && m.is_empty()
+    {
+        return Err(Error::Config {
+            message: "lint.nontrivial_body must not be an empty table; \
+                      remove the key or add at least one directive entry"
+                .to_string(),
+        });
+    }
+    if let Some(ref m) = max_map
+        && m.is_empty()
+    {
+        return Err(Error::Config {
+            message: "lint.max_body_length must not be an empty table; \
+                      remove the key or add at least one directive entry"
+                .to_string(),
+        });
     }
 
     // Collect all directive keys from both maps for drift check.
@@ -1809,6 +1847,93 @@ undeclared-type = ["Section A"]
     // ------------------------------------------------------------------
     // required_sections: empty section list is a config error
     // ------------------------------------------------------------------
+
+    #[test]
+    fn required_sections_empty_string_in_section_name_is_config_error() {
+        // An empty-string section name is meaningless and must be rejected.
+        let toml = r#"
+[[needs.types]]
+directive = "arch-decision"
+
+[tool.patdhlk-skills.lint.required_sections]
+arch-decision = ["Context", "", "Consequences"]
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(
+            matches!(err, Error::Config { .. }),
+            "expected Config error, got: {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("arch-decision"),
+            "error must name the directive, got: {msg}"
+        );
+        assert!(
+            msg.contains("required_sections"),
+            "error must mention required_sections, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn required_sections_empty_outer_map_is_config_error() {
+        // An empty required_sections table is config noise; fail-closed.
+        let toml = r#"
+[tool.patdhlk-skills.lint]
+required_sections = {}
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(
+            matches!(err, Error::Config { .. }),
+            "expected Config error, got: {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("required_sections"),
+            "error must name the key, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn nontrivial_body_empty_outer_map_is_config_error() {
+        // An empty nontrivial_body table is config noise; fail-closed.
+        let toml = r#"
+[tool.patdhlk-skills.lint]
+nontrivial_body = {}
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(
+            matches!(err, Error::Config { .. }),
+            "expected Config error, got: {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("nontrivial_body"),
+            "error must name the key, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn max_body_length_empty_outer_map_is_config_error() {
+        // An empty max_body_length table is config noise; fail-closed.
+        let toml = r#"
+[tool.patdhlk-skills.lint]
+max_body_length = {}
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(
+            matches!(err, Error::Config { .. }),
+            "expected Config error, got: {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("max_body_length"),
+            "error must name the key, got: {msg}"
+        );
+    }
 
     #[test]
     fn required_sections_empty_section_list_is_config_error() {

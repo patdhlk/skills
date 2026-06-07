@@ -26,6 +26,23 @@ description = "GitHub issue number this need is tracked by (github backend only)
 nullable = true
 schema = { type = "string" }
 
+# Verdict fields (ADR_0015): rubric judged, failed axes (comma-separated,
+# empty/absent = pass), and the judged need's content fingerprint.
+[needs.fields.rubric]
+description = "Rubric a verdict was judged against (verdict type only)"
+nullable = true
+schema = { type = "string" }
+
+[needs.fields.axes_failed]
+description = "Comma-separated failed axis names; empty or absent = pass"
+nullable = true
+schema = { type = "string" }
+
+[needs.fields.fingerprint]
+description = "sha256:<16hex> fingerprint of the judged need's title+body"
+nullable = true
+schema = { type = "string" }
+
 # Need types — the lean role set the patdhlk-skills workflows read and write.
 # Consumer repos keep their own catalogs; skills resolve directives through
 # [tool.patdhlk-skills.roles] below (ADR_0004).
@@ -72,6 +89,13 @@ prefix = "TEST_"
 color = "#DCB239"
 style = "node"
 
+[[needs.types]]
+directive = "verdict"
+title = "Verdict"
+prefix = "VERDICT_"
+color = "#C8A2C8"
+style = "node"
+
 # Extra link types — traceability relations beyond the built-in `:links:`.
 
 [needs.links.satisfies]
@@ -110,6 +134,7 @@ requirement = "req"
 decision = "arch-decision"
 term = "term"
 test = "test"
+verdict = "verdict"
 
 # Lint rules (pds lint / pds check): enforce structural norms on active needs.
 # Needs whose status is in gate.exempt_statuses (default: done, wontfix) are
@@ -135,3 +160,13 @@ issue = 200
 # this corpus with paraphrased and novel candidates (ISSUE_0017).
 [tool.patdhlk-skills.dedup]
 threshold = 0.45
+
+# Verdict gate (pds verdict-check, ADR_0015/ADR_0016): issues in the listed
+# statuses must carry a passing, fresh triage verdict. Axis semantics live
+# in the judging skills' prose (ISSUE_0022), not in the binary.
+[tool.patdhlk-skills.rubrics.triage]
+axes = ["category", "state", "actionability", "duplicate-check"]
+
+[tool.patdhlk-skills.verdicts]
+require = { issue = "triage" }
+statuses = ["ready-for-agent", "ready-for-human", "in-progress"]

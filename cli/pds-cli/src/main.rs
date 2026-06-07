@@ -45,6 +45,8 @@ enum Commands {
         #[arg(long, value_name = "RATIO")]
         threshold: Option<f64>,
     },
+    /// Check verdict coverage: missing / failing / stale / malformed (exit 1 on any).
+    VerdictCheck,
 }
 
 impl Commands {
@@ -57,6 +59,7 @@ impl Commands {
             Commands::Next => "next",
             Commands::Search { .. } => "search",
             Commands::Dedup { .. } => "dedup",
+            Commands::VerdictCheck => "verdict-check",
         }
     }
 }
@@ -100,6 +103,7 @@ fn run(cli: &Cli) -> Result<Outcome, Error> {
             candidate,
             threshold,
         } => pds_core::run_dedup(&config, &project.root, candidate, *threshold),
+        Commands::VerdictCheck => pds_core::run_verdict_check(&config, &project.root),
     }
 }
 

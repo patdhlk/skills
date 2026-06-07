@@ -325,6 +325,10 @@ dogfooded artifacts.
    tables are scaffolded by ``/setup-patdhlk-skills`` — defaults live
    in the plugin, not the binary. A ``require`` entry naming an
    undeclared rubric is a config hard error (exit 2).
+   An optional ``statuses`` key on the same table scopes the demand: a
+   verdict is required only when the judged need's status is in the
+   list; absent means all non-exempt statuses (decided closing
+   ISSUE_0014's grill, 2026-06-07).
 
    **Consequences.** ✅ The binary stays generic; rubric changes need
    no Rust release. ❌ Axis meaning exists only in skill prose —

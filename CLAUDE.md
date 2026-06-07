@@ -32,7 +32,11 @@ repo dogfoods its own system: backlog, decisions, and glossary live in
   needs.json plus strict fail-closed diagnostics). Schema violations,
   broken links, duplicate IDs fail the gate (ADR_0007). When
   `[tool.patdhlk-skills.lint]` is configured, `pds check` also runs
-  lint; findings carry `"check":"lint:<rule>"` and the offending need ID.
+  lint (findings `"check":"lint:<rule>"`); when
+  `[tool.patdhlk-skills.verdicts]` is configured it also runs
+  verdict-check (findings `"check":"verdict:<bucket>"` — missing /
+  failing / stale / malformed, ADR_0015). `pds verdict-check` runs the
+  verdict gate standalone.
 - Exit contract (ADR_0014/0019): `pds` prints one JSON object on stdout
   (`{"schema":1,"verb":...}`), builder/log noise on stderr; exit 0 =
   clean, 1 = violations (read the JSON findings, fix the corpus), 2 =

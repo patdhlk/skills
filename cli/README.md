@@ -98,6 +98,12 @@ pds check
 # Build the corpus only (produces needs.json, exits 0/1/2).
 pds build
 
+# Per-status counts over the issue backlog (rebuilds first; exits 0/1/2).
+pds status
+
+# The next actionable (ready-for-agent) issue (rebuilds first; exits 0/1/2).
+pds next
+
 # Override the config path.
 pds check --config path/to/ubproject.toml
 ```

@@ -132,7 +132,7 @@ pub struct Config {
     pub exempt_statuses: Vec<String>,
     /// Lint rule configuration (`None` when `[tool.patdhlk-skills.lint]` is absent).
     pub lint: Option<LintConfig>,
-    /// Similarity threshold for `pds dedup` (0–1], from
+    /// Similarity threshold for `pds dedup` (0, 1], from
     /// `[tool.patdhlk-skills.dedup]`; defaults to
     /// [`crate::retrieval::DEFAULT_THRESHOLD`] when absent.
     pub dedup_threshold: f64,
@@ -2076,5 +2076,14 @@ future_engine_key = "embed"
 "#;
         let (_tmp, project) = make_project(toml);
         assert!(Config::load(&project).is_ok());
+    }
+
+    #[test]
+    fn dedup_threshold_integer_one_is_legal() {
+        // TOML integer 1 must coerce to 1.0 — users write `threshold = 1`.
+        let toml = "[tool.patdhlk-skills.dedup]\nthreshold = 1\n";
+        let (_tmp, project) = make_project(toml);
+        let cfg = Config::load(&project).unwrap();
+        assert_eq!(cfg.dedup_threshold, 1.0);
     }
 }

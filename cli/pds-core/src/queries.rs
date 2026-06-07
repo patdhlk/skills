@@ -31,6 +31,11 @@ const ISSUE_ROLE: &str = "issue";
 const READY_FOR_AGENT: &str = "ready-for-agent";
 
 /// The status key used for issue-typed needs that carry no `status`.
+///
+/// **Latent constraint (ADR_0005):** this name must never equal any real triage
+/// state (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`,
+/// `in-progress`, `done`, `wontfix`). If the triage state machine gains a new
+/// state, verify it does not collide with `"none"`.
 const NO_STATUS: &str = "none";
 
 // ---------------------------------------------------------------------------
@@ -64,9 +69,35 @@ pub fn next_issue<'a>(corpus: &'a NeedsCorpus, issue_directive: &str) -> Option<
         .find(|n| n.need_type == issue_directive && n.status.as_deref() == Some(READY_FOR_AGENT))
 }
 
+/// Assemble the JSON payload for a `pds next` response given the matched need.
+///
+/// Returns a map with `"issue"` (the need's id/title/status/links) and
+/// `"reason": null` — the null-reason shape for a found issue.
+pub fn next_payload(need: &Need) -> Map<String, Value> {
+    let mut payload = Map::new();
+    payload.insert(
+        "issue".to_string(),
+        json!({
+            "id": need.id,
+            "title": need.title,
+            "status": need.status,
+            "links": need.links,
+        }),
+    );
+    payload.insert("reason".to_string(), Value::Null);
+    payload
+}
+
 // ---------------------------------------------------------------------------
-// Orchestration (guard → build → load → query → Outcome)
+// Internal shared orchestration
 // ---------------------------------------------------------------------------
+
+/// The result of the shared build+load step: either a ready corpus or a
+/// pre-formed failed [`Outcome`] to return directly to the caller.
+enum CorpusResult {
+    Ready(NeedsCorpus),
+    BuildFailed(Outcome),
+}
 
 /// Reject the GitHub backend before doing any work, naming the equivalent `gh`
 /// command for the invoked verb. pds v1 has no github driver (forward-compatible
@@ -98,33 +129,40 @@ fn issue_directive(config: &Config) -> Result<&str, Error> {
         })
 }
 
-/// Run the non-gating build, then load the produced corpus. On a failed build
-/// the build [`Outcome`] is returned via `Err`-shaped control flow handled by
-/// the callers: we model it as `Ok(Err(outcome))` so each verb can re-wrap the
-/// failed outcome under its own envelope.
-fn build_and_load(
+/// Guard the backend, resolve the issue directive, run the non-gating build,
+/// and load the produced corpus. Returns either a ready corpus + directive
+/// string, or a failed build outcome to return directly, or an [`Error`].
+///
+/// This is the shared preamble for every backlog-query verb. Future verbs
+/// (lint, search, dedup, …) call this and add only their own pure query.
+fn prepare_corpus(
     config: &Config,
     project_root: &Path,
-) -> Result<Result<NeedsCorpus, Outcome>, Error> {
+    gh_hint: &str,
+) -> Result<(CorpusResult, String), Error> {
+    guard_backend(config, gh_hint)?;
+    let directive = issue_directive(config)?.to_string();
     let build = run_build(config, project_root)?;
     if build.is_failed() {
-        // Builder ran but exited non-zero: hand the failed outcome back so the
-        // caller can return it (findings array, exit 1) under its own verb.
-        return Ok(Err(build));
+        return Ok((CorpusResult::BuildFailed(build), directive));
     }
-    // Build succeeded: the fresh needs.json must be loadable.
     let corpus = NeedsCorpus::load(&config.needs_json)?;
-    Ok(Ok(corpus))
+    Ok((CorpusResult::Ready(corpus), directive))
 }
+
+// ---------------------------------------------------------------------------
+// Orchestration (guard → build → load → query → Outcome)
+// ---------------------------------------------------------------------------
 
 /// `pds status`: per-status counts over issue-typed needs from a fresh corpus.
 pub fn run_status(config: &Config, project_root: &Path) -> Result<Outcome, Error> {
-    guard_backend(config, "gh issue list --state all --json labels")?;
-    let directive = issue_directive(config)?.to_string();
+    let gh_hint = "gh issue list --state all --json labels \
+                   --jq '[.[].labels[].name] | group_by(.) | map({(.[0]): length}) | add'";
+    let (corpus_result, directive) = prepare_corpus(config, project_root, gh_hint)?;
 
-    let corpus = match build_and_load(config, project_root)? {
-        Ok(corpus) => corpus,
-        Err(failed) => return Ok(failed),
+    let corpus = match corpus_result {
+        CorpusResult::Ready(c) => c,
+        CorpusResult::BuildFailed(failed) => return Ok(failed),
     };
 
     let counts = status_counts(&corpus, &directive);
@@ -144,40 +182,27 @@ pub fn run_status(config: &Config, project_root: &Path) -> Result<Outcome, Error
 /// `pds next`: the lowest-id ready-for-agent issue from a fresh corpus, or a
 /// clean `none-ready` outcome when the backlog has none.
 pub fn run_next(config: &Config, project_root: &Path) -> Result<Outcome, Error> {
-    guard_backend(
-        config,
-        "gh issue list --label ready-for-agent --state open \
-         --json number,title,labels --limit 1",
-    )?;
-    let directive = issue_directive(config)?.to_string();
+    let gh_hint = "gh issue list --label ready-for-agent --state open \
+                   --json number,title,labels --limit 1";
+    let (corpus_result, directive) = prepare_corpus(config, project_root, gh_hint)?;
 
-    let corpus = match build_and_load(config, project_root)? {
-        Ok(corpus) => corpus,
-        Err(failed) => return Ok(failed),
+    let corpus = match corpus_result {
+        CorpusResult::Ready(c) => c,
+        CorpusResult::BuildFailed(failed) => return Ok(failed),
     };
 
-    let mut payload = Map::new();
-    match next_issue(&corpus, &directive) {
-        Some(need) => {
-            payload.insert(
-                "issue".to_string(),
-                json!({
-                    "id": need.id,
-                    "title": need.title,
-                    "status": need.status,
-                    "links": need.links,
-                }),
-            );
-            payload.insert("reason".to_string(), Value::Null);
-        }
+    let payload = match next_issue(&corpus, &directive) {
+        Some(need) => next_payload(need),
         None => {
-            payload.insert("issue".to_string(), Value::Null);
-            payload.insert(
+            let mut m = Map::new();
+            m.insert("issue".to_string(), Value::Null);
+            m.insert(
                 "reason".to_string(),
                 Value::String("none-ready".to_string()),
             );
+            m
         }
-    }
+    };
     Ok(Outcome::clean(payload))
 }
 
@@ -265,5 +290,32 @@ mod tests {
         let counts = status_counts(&corpus, "nonexistent");
         assert!(counts.is_empty(), "no needs of that type => empty counts");
         assert!(next_issue(&corpus, "nonexistent").is_none());
+    }
+
+    #[test]
+    fn next_payload_shape_has_issue_fields_and_null_reason() {
+        // Pin the payload assembly: links and null-reason shape must be stable.
+        let json = r#"{
+            "current_version": "",
+            "project": "t",
+            "versions": { "": { "needs": {
+                "ISSUE_0001": {"id":"ISSUE_0001","type":"issue","title":"first ready",
+                               "status":"ready-for-agent","links":["FEAT_0001"]}
+            } } }
+        }"#;
+        let corpus = corpus_from(json);
+        let need = next_issue(&corpus, "issue").expect("issue exists");
+        let payload = next_payload(need);
+
+        let issue = payload.get("issue").expect("issue key present");
+        assert_eq!(issue["id"], "ISSUE_0001");
+        assert_eq!(issue["title"], "first ready");
+        assert_eq!(issue["status"], "ready-for-agent");
+        let links = issue["links"].as_array().expect("links is array");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0], "FEAT_0001");
+
+        let reason = payload.get("reason").expect("reason key present");
+        assert!(reason.is_null(), "reason must be null when issue found");
     }
 }

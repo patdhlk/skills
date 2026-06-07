@@ -47,8 +47,8 @@ pds search "<issue title> <issue body>" --config ubproject.toml
 ```
 
 Use the full title + body as the query (ADR_0021 saturation). The top hit
-will be the issue under triage itself (self-match clamps to 1.0) — **skip
-it**; judge the remaining hits. A high-scoring hit on a `done` issue or an
+is the issue under triage itself — **skip it**; judge the remaining
+hits. A high-scoring hit on a `done` issue or an
 `arch-decision` means the report is already shipped; a high-scoring hit on
 another open issue means it may be a duplicate. Feed both signals into
 rule 1 below. The github backend keeps its existing `gh issue list`

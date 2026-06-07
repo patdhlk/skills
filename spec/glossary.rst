@@ -24,9 +24,10 @@ sphinx-needs replacement for a markdown CONTEXT.md (:need:`ADR_0002`).
 .. term:: Strict build gate
    :id: GLOSS_0003
 
-   The ``sphinx-build -W`` run that ends every skill mutation of the spec.
-   Schema violations, broken links, and duplicate IDs fail the gate; a
-   mutation is not done until the gate passes (:need:`ADR_0007`).
+   The ``pds check`` run that ends every skill mutation of the spec
+   (mechanism per :need:`ADR_0017`; ``sphinx-build -W`` is the no-pds
+   fallback). Schema violations, broken links, and duplicate IDs fail the
+   gate; a mutation is not done until the gate passes (:need:`ADR_0007`).
 
 .. term:: Triage state
    :id: GLOSS_0004

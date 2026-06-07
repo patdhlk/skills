@@ -1454,6 +1454,29 @@ fn verdict_check_missing_exits_one() {
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0]["check"], "verdict:missing");
     assert_eq!(findings[0]["need"], "ISSUE_0001");
+    assert!(json["needs_json"].as_str().unwrap().ends_with("needs.json"));
+}
+
+#[cfg(unix)]
+#[test]
+fn verdict_check_failing_axes_exits_one() {
+    let fp = pds_core::fingerprint("the title", "the body");
+    let fields = format!(r#""rubric":"triage","axes_failed":"state","fingerprint":"{fp}""#);
+    let (_tmp, config) = verdict_project(Some(&fields));
+
+    let assert = pds()
+        .arg("verdict-check")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.failure().code(1).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let findings = json["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0]["check"], "verdict:failing");
+    assert_eq!(findings[0]["need"], "ISSUE_0001");
+    assert!(findings[0]["message"].as_str().unwrap().contains("state"));
 }
 
 #[cfg(unix)]

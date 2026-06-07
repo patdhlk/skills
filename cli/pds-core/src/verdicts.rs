@@ -307,18 +307,25 @@ pub fn run_verdict_check(config: &Config, project_root: &Path) -> Result<Outcome
         &directive,
         &config.exempt_statuses,
     );
+    Ok(verdict_outcome(findings, &config.needs_json))
+}
+
+/// Assemble an [`Outcome`] from verdict findings plus the corpus path. Empty
+/// findings ⇒ clean; any finding ⇒ failed. needs_json always reported — the
+/// corpus was freshly built.
+fn verdict_outcome(findings: Vec<VerdictFinding>, needs_json: &Path) -> Outcome {
     let arr: Vec<Value> = findings.iter().map(finding_json).collect();
     let failed = !arr.is_empty();
     let mut payload = Map::new();
     payload.insert("findings".to_string(), Value::Array(arr));
     payload.insert(
         "needs_json".to_string(),
-        Value::String(config.needs_json.to_string_lossy().into_owned()),
+        Value::String(needs_json.to_string_lossy().into_owned()),
     );
     if failed {
-        Ok(Outcome::failed(payload))
+        Outcome::failed(payload)
     } else {
-        Ok(Outcome::clean(payload))
+        Outcome::clean(payload)
     }
 }
 

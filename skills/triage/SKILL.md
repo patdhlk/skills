@@ -69,7 +69,8 @@ pds check
 # no pds: uv run sphinx-build -W -b html <spec_dir> <spec_dir>/_build/html
 ```
 
-Exit 1 means fix the corpus and re-run; exit 2 means stop and escalate.
+Exit 0 means proceed; exit 1 means fix the corpus and re-run; exit 2 means
+stop and escalate.
 Report counts per verdict and the `ready-for-agent` list — that's the
 pickup queue for the next work session.
 

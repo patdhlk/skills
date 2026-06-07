@@ -319,7 +319,7 @@ needs to override a path or builder invocation:
 ```toml
 [tool.patdhlk-skills.gate]
 # needs_json   = "<spec>/_build/needs/needs.json"   # default: <spec>/_build/needs/needs.json
-# sphinx_command = "uv run sphinx-build"            # default: how pds invokes the sphinx builder
+# sphinx_command = ["uv", "run", "sphinx-build"]    # default: how pds invokes the sphinx builder (array, one element per argv)
 ```
 
 Both keys are optional; an absent `[tool.patdhlk-skills.gate]` table means
@@ -344,7 +344,8 @@ that they are forward-looking. Absent tables = those future checks are off
 # axes = ["clarity", "testability", ...]
 
 [tool.patdhlk-skills.verdicts]
-# verdict policy for the future `pds verdict-check` verb
+# verdict policy for the future `pds verdict-check` verb (ADR_0016):
+# require = { req = "quality" }   # map need type -> required rubric name
 ```
 
 Verdicts (ADR_0015) are derived sphinx-needs records — IDs

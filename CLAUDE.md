@@ -21,7 +21,11 @@ repo dogfoods its own system: backlog, decisions, and glossary live in
 - Backlog queries have dedicated verbs (each rebuilds needs.json first):
   `pds status` = per-status issue counts; `pds next` = the lowest-ID
   `ready-for-agent` issue (`{"issue": null, "reason": "none-ready"}` when
-  the backlog is clean). Ad-hoc reads stay `jq`.
+  the backlog is clean); `pds search "<query>"` = BM25-ranked hits over
+  all need types (always exit 0); `pds dedup "<candidate>"` = the same
+  ranking as a pre-filing gate — exit 1 when an issue-typed hit reaches
+  the threshold (ADR_0021; `[tool.patdhlk-skills.dedup]` /
+  `--threshold`). Ad-hoc reads stay `jq`.
 - New IDs: dense max+1 per prefix, from a fresh needs.json (ADR_0008).
 - **Every spec mutation must end with the strict gate: `make strict`**
   (= `pds check`, ADR_0017 — the per-builder gate that emits a fresh

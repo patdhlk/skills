@@ -460,11 +460,14 @@ dogfooded artifacts.
    **Decision.** Both verbs share one hits shape:
    ``"hits": [{id, type, status, title, score}]`` ranked descending,
    with ``"engine"`` emitted once at top level, never per hit.
-   ``score`` is a normalized 0–1 ratio: the hit's raw engine score
-   divided by the query document's *self-score* (the score the query
-   would achieve against its own terms — the engine's theoretical
-   maximum for that query). Both verbs rank **all** need types.
-   ``pds search`` is pure ranking: no threshold, always exit 0.
+   ``score`` is a normalized 0–1 ratio, clamped at 1.0: the hit's raw
+   engine score divided by the query's *self-score* (the raw score the
+   query's own terms achieve when the query is scored as a document of
+   average corpus length — the engine's saturation ceiling for that
+   query). Both verbs rank **all** need types.
+   ``pds search`` is pure ranking: no threshold — zero hits is still
+   exit 0 (build failures and tool/config errors keep the usual 1/2
+   exit codes).
    ``pds dedup`` adds ``"threshold"`` and
    ``"verdict": "duplicate" | "unique"``: the verdict flips to
    ``duplicate`` (exit 1) only when an **issue-typed** hit reaches

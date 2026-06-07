@@ -34,9 +34,11 @@ const CONTENT_WEIGHT: usize = 1;
 /// Hits are capped — ranked output below ~10 entries is noise for an agent.
 const MAX_HITS: usize = 10;
 /// The shipped dedup threshold when `[tool.patdhlk-skills.dedup]` has none.
-/// Chosen by eyeballing real hits against this repo's corpus (final task of
-/// the ISSUE_0017 plan tunes and re-records this value).
-pub const DEFAULT_THRESHOLD: f64 = 0.35;
+/// Tuned by probing this repo's corpus (ISSUE_0017): 0.45 is the value that
+/// separates clear paraphrases (≥ 0.56 on the top issue hit) from
+/// related-but-distinct candidates (≤ 0.38) with no misclassifications across
+/// six probes (two paraphrases, one near-copy, one borderline, two novel).
+pub const DEFAULT_THRESHOLD: f64 = 0.45;
 
 /// A ranked retrieval hit: a need plus its normalized 0–1 score.
 pub struct Hit<'a> {

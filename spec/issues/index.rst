@@ -319,7 +319,7 @@ The dogfooded backlog (:need:`ADR_0012`): every v1 skill port is an
 
 .. issue:: pds dedup and pds search — retrieval over the corpus
    :id: ISSUE_0017
-   :status: ready-for-agent
+   :status: done
    :kind: improvement
    :implements: FEAT_0001
    :links: ADR_0021

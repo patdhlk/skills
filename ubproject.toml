@@ -129,3 +129,9 @@ arch-decision = ["Context", "Decision", "Consequences"]
 # Shortest non-exempt issue body in the current corpus: ISSUE_0018 at 539 chars.
 # Threshold set to 200 — well below half of the shortest — giving ~2.7× headroom.
 issue = 200
+
+# Dedup gate (pds dedup): an issue-typed hit at or above this normalized
+# similarity ratio (ADR_0021) blocks filing with exit 1. Tuned by probing
+# this corpus with paraphrased and novel candidates (ISSUE_0017).
+[tool.patdhlk-skills.dedup]
+threshold = 0.45

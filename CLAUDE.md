@@ -15,14 +15,21 @@ repo dogfoods its own system: backlog, decisions, and glossary live in
 - ADRs: `spec/architecture/index.rst` (`.. arch-decision::`). Glossary:
   `spec/glossary.rst` (`.. term::`). Durable artifacts are RST, never
   markdown (ADR_0002); SKILL.md/README/CLAUDE.md are exempt.
-- Query the corpus via needs.json, never by grepping RST: `make needs`,
-  then `jq` on `spec/_build/needs/needs.json` (ADR_0006).
+- Query the corpus via needs.json, never by grepping RST: `make needs`
+  (runs `pds build` under the hood), then `jq` on
+  `spec/_build/needs/needs.json` (ADR_0006).
 - New IDs: dense max+1 per prefix, from a fresh needs.json (ADR_0008).
 - **Every spec mutation must end with the strict gate: `make strict`**
-  (= `uv run sphinx-build -W -b html spec spec/_build/html`). Schema
-  violations, broken links, duplicate IDs fail the gate (ADR_0007).
-- Toolchain: `uv sync` once; everything runs through `uv run`. `ubc` is
-  the preferred needs builder when on PATH.
+  (= `pds check`, ADR_0017 — the per-builder gate that emits a fresh
+  needs.json plus strict fail-closed diagnostics). Schema violations,
+  broken links, duplicate IDs fail the gate (ADR_0007).
+- Exit contract (ADR_0014/0019): `pds` prints one JSON object on stdout
+  (`{"schema":1,"verb":...}`), builder/log noise on stderr; exit 0 =
+  clean, 1 = violations (read the JSON findings, fix the corpus), 2 =
+  tool/config error (stop and escalate). Branch on the exit code.
+- Toolchain: `uv sync` once; spec build/query/gate run through `pds`
+  (`ubc` is the preferred builder when on PATH, sphinx-build the
+  fallback). Everything else runs through `uv run`.
 
 ## Layout
 

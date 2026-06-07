@@ -34,11 +34,12 @@ or via the Claude Code plugin marketplace (`patdhlk-skills`).
   # ... maps abstract roles to YOUR directive names
   ```
 
-- Skills **read** the corpus by building `needs.json` (`ubc build needs`,
-  faster; `sphinx-build -b needs` as fallback) and querying it with `jq`.
+- Skills **read** the corpus by building `needs.json` (`pds build`, which
+  runs the configured builder — ubc preferred, sphinx-build fallback) and
+  querying it with `jq`.
 - Skills **write** by editing RST and finishing with the strict gate
-  (`sphinx-build -W`) — schema violations, broken links, and duplicate IDs
-  fail immediately.
+  (`pds check`; raw `sphinx-build -W` when `pds` is missing) — schema
+  violations, broken links, and duplicate IDs fail immediately.
 - Run `/setup-patdhlk-skills` once per repo: it adapts to your existing
   `ubproject.toml` (never imposes a catalog), persists the role map, and can
   scaffold a spec skeleton (via [uv](https://docs.astral.sh/uv/)), the
@@ -67,8 +68,8 @@ ADRs that explain everything above.
 ```bash
 uv sync          # set up the toolchain
 make html        # build the spec
-make strict      # the strict gate CI runs
-make needs       # build needs.json (ubc preferred)
+make strict      # the strict gate CI runs (= pds check)
+make needs       # build needs.json (= pds build)
 make serve       # live preview on :8000
 ```
 

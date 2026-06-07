@@ -62,12 +62,15 @@ reason) and get the user's go-ahead — they may override any verdict —
 
 ### 4. Validate and report
 
-Local mutations end with the strict gate (ADR_0007):
+Local mutations end with the strict gate (ADR_0007, ADR_0017):
 
 ```bash
-uv run sphinx-build -W -b html <spec_dir> <spec_dir>/_build/html
+pds check
+# no pds: uv run sphinx-build -W -b html <spec_dir> <spec_dir>/_build/html
 ```
 
+Exit 0 means proceed; exit 1 means fix the corpus and re-run; exit 2 means
+stop and escalate.
 Report counts per verdict and the `ready-for-agent` list — that's the
 pickup queue for the next work session.
 

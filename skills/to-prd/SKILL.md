@@ -33,9 +33,9 @@ one-liners) and get the user's go-ahead **before** touching files.
 Build a fresh needs.json — never grep RST, never cache (ADR_0006):
 
 ```bash
-mkdir -p <spec_dir>/_build/needs
-ubc build needs --outpath <spec_dir>/_build/needs/needs.json   # builder = "ubc"
-# or: uv run sphinx-build -b needs <spec_dir> <spec_dir>/_build/needs
+pds build   # fresh needs.json at <spec_dir>/_build/needs/needs.json
+# no pds: ubc build needs --outpath <spec_dir>/_build/needs/needs.json
+#         (or uv run sphinx-build -b needs <spec_dir> <spec_dir>/_build/needs)
 ```
 
 Take the highest numeric suffix per prefix and allocate dense max+1
@@ -82,12 +82,15 @@ Both feature and requirements start `:status: draft`. Link reqs with
 
 ### 5. Validate and hand off
 
-Run the strict gate — the mutation is not done until it passes (ADR_0007):
+Run the strict gate — the mutation is not done until it passes (ADR_0007,
+ADR_0017):
 
 ```bash
-uv run sphinx-build -W -b html <spec_dir> <spec_dir>/_build/html
+pds check
+# no pds: uv run sphinx-build -W -b html <spec_dir> <spec_dir>/_build/html
 ```
 
+Exit 1 means fix the corpus and re-run; exit 2 means stop and escalate.
 Report the new need IDs and offer the natural next step: `/to-issues` to
 slice the requirements into grabbable issues.
 

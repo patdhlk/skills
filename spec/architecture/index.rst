@@ -123,8 +123,10 @@ dogfooded artifacts.
    duplicate IDs are only checked at build time.
 
    **Decision.** Every skill mutation of the spec ends with a strict build
-   (``uv run sphinx-build -W -b html``). A failed gate means the mutation is
-   fixed before the skill reports success. CI runs the same gate on PRs.
+   (``uv run sphinx-build -W -b html``; mechanism since revised by
+   :need:`ADR_0017` — the gate is ``pds check`` building needs, not html).
+   A failed gate means the mutation is fixed before the skill reports
+   success. CI runs the same gate on PRs.
 
    **Consequences.** ✅ The corpus is never left invalid. ✅ Duplicate IDs
    from parallel branches surface at merge. ❌ Seconds of build time per

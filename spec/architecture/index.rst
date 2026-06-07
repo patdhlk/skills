@@ -443,3 +443,42 @@ dogfooded artifacts.
    and verbs can never disagree about where needs.json lives.
    ❌ Sphinx-build-only consumer repos must carry an
    ``ubproject.toml`` even if they configure needs in ``conf.py``.
+
+.. arch-decision:: pds retrieval contract — normalized scores over swappable engines
+   :id: ADR_0021
+   :status: accepted
+   :links: ADR_0014, ADR_0019
+
+   **Context.** :need:`ISSUE_0017` adds retrieval verbs
+   (``pds search``, ``pds dedup``) whose JSON shape is frozen the
+   moment skills parse it (:need:`ADR_0019`). Raw BM25 scores are
+   unbounded and corpus-dependent — a threshold over them drifts as
+   the corpus grows and silently changes meaning when the engine is
+   swapped for embeddings (whose similarity is naturally 0–1).
+   Decided in the grilling session of 2026-06-07.
+
+   **Decision.** Both verbs share one hits shape:
+   ``"hits": [{id, type, status, title, score}]`` ranked descending,
+   with ``"engine"`` emitted once at top level, never per hit.
+   ``score`` is a normalized 0–1 ratio: the hit's raw engine score
+   divided by the query document's *self-score* (the score the query
+   would achieve against its own terms — the engine's theoretical
+   maximum for that query). Both verbs rank **all** need types.
+   ``pds search`` is pure ranking: no threshold, always exit 0.
+   ``pds dedup`` adds ``"threshold"`` and
+   ``"verdict": "duplicate" | "unique"``: the verdict flips to
+   ``duplicate`` (exit 1) only when an **issue-typed** hit reaches
+   the threshold — non-issue hits inform but never gate. The
+   threshold lives in ``[tool.patdhlk-skills.dedup]``, overridable
+   per invocation via ``--threshold``. Engine internals (BM25
+   parameters, tokenization, field weights) are implementation
+   constants, not contract.
+
+   **Consequences.** ✅ ``score`` semantics survive the BM25 → embed
+   swap; consumer thresholds keep meaning. ✅ All-types ranking
+   surfaces "an ADR already covers this" without an ADR hit ever
+   blocking a legitimate filing. ❌ Normalized scores express
+   similarity to *this* query only — never comparable across queries
+   as absolute relevance. ❌ Self-score normalization is
+   non-standard; swapping in raw engine scores later is a breaking
+   schema bump, not a tweak.

@@ -26,7 +26,9 @@ repo dogfoods its own system: backlog, decisions, and glossary live in
 - **Every spec mutation must end with the strict gate: `make strict`**
   (= `pds check`, ADR_0017 — the per-builder gate that emits a fresh
   needs.json plus strict fail-closed diagnostics). Schema violations,
-  broken links, duplicate IDs fail the gate (ADR_0007).
+  broken links, duplicate IDs fail the gate (ADR_0007). When
+  `[tool.patdhlk-skills.lint]` is configured, `pds check` also runs
+  lint; findings carry `"check":"lint:<rule>"` and the offending need ID.
 - Exit contract (ADR_0014/0019): `pds` prints one JSON object on stdout
   (`{"schema":1,"verb":...}`), builder/log noise on stderr; exit 0 =
   clean, 1 = violations (read the JSON findings, fix the corpus), 2 =

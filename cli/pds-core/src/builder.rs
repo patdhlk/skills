@@ -12,11 +12,11 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 use crate::config::{Builder, Config};
 use crate::error::Error;
-use crate::outcome::Outcome;
+use crate::outcome::{self, Outcome};
 
 /// A fully-resolved builder invocation: which program, with which arguments,
 /// run from which working directory. Pure data so command construction is
@@ -189,17 +189,14 @@ fn build_failure_payload(program: &str, status: &std::process::ExitStatus) -> Ma
 /// number where the OS reports one (e.g. a child killed by SIGKILL), with a
 /// bare `"signal"` fallback when neither is available. The JSON key is
 /// `"check"` to match the output schema.
+///
+/// Delegates to [`crate::outcome::finding`] — the shared envelope constructor.
 pub(crate) fn step_finding(
     step_name: &str,
     program: &str,
     status: &std::process::ExitStatus,
 ) -> Value {
-    json!({
-        "check": step_name,
-        "severity": "error",
-        "need": Value::Null,
-        "message": failure_message(program, status),
-    })
+    outcome::finding(step_name, "error", None, &failure_message(program, status))
 }
 
 /// Human-readable failure message for a non-zero/abnormal child exit.
@@ -258,6 +255,8 @@ mod tests {
                 "run".to_string(),
                 "sphinx-build".to_string(),
             ],
+            exempt_statuses: vec!["done".to_string(), "wontfix".to_string()],
+            lint: None,
         }
     }
 

@@ -26,6 +26,8 @@ enum Commands {
     Build,
     /// Check the corpus for violations.
     Check,
+    /// Lint need bodies for substance (required sections, weasel words, …).
+    Lint,
     /// Report per-status counts over the issue backlog.
     Status,
     /// Report the next actionable (ready-for-agent) issue.
@@ -37,6 +39,7 @@ impl Commands {
         match self {
             Commands::Build => "build",
             Commands::Check => "check",
+            Commands::Lint => "lint",
             Commands::Status => "status",
             Commands::Next => "next",
         }
@@ -74,6 +77,7 @@ fn run(cli: &Cli) -> Result<Outcome, Error> {
     match cli.command {
         Commands::Build => pds_core::run_build(&config, &project.root),
         Commands::Check => pds_core::run_check(&config, &project.root),
+        Commands::Lint => pds_core::run_lint(&config, &project.root),
         Commands::Status => pds_core::run_status(&config, &project.root),
         Commands::Next => pds_core::run_next(&config, &project.root),
     }

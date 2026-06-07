@@ -322,23 +322,87 @@ needs to override a path or builder invocation:
 [tool.patdhlk-skills.gate]
 # needs_json   = "<spec>/_build/needs/needs.json"   # default: <spec>/_build/needs/needs.json
 # sphinx_command = ["uv", "run", "sphinx-build"]    # default: how pds invokes the sphinx builder (array, one element per argv)
+# exempt_statuses = ["done", "wontfix"]             # default: statuses fully skipped by lint (and future checks)
 ```
 
-Both keys are optional; an absent `[tool.patdhlk-skills.gate]` table means
-`pds check` runs with its built-in defaults (ADR_0014).
+All keys are optional; an absent `[tool.patdhlk-skills.gate]` table means
+`pds check` runs with its built-in defaults (ADR_0014). `exempt_statuses`
+defaults to `["done", "wontfix"]`; a need with NO status is never exempt.
 
-## §10 Forward-looking pds config (declared now, ignored by today's pds)
+## §9a The lint config table (`[tool.patdhlk-skills.lint]`)
 
-These tables and the `verdict` type let later `pds` verbs (lint /
-verdict-check, not yet shipped) read project policy from config. Today's
-`pds` IGNORES them — offer to scaffold only with the user's understanding
-that they are forward-looking. Absent tables = those future checks are off
-(ADR_0014). Mark them clearly when you write them.
+**Shipped in `pds` (ISSUE_0013).** `pds lint` runs the rules; `pds check`
+also runs lint automatically when `[tool.patdhlk-skills.lint]` is present.
+An absent table means lint is off — clean exit 0 without building.
+
+All rule keys are optional (rule is off when the key is absent). Every
+directive name used as a key must be declared in `[[needs.types]]`; an
+undeclared name is a config error (exit 2). Findings carry
+`{"check": "lint:<rule>", "severity": "error", "need": "<ID>", "message": "…"}`.
+
+### Rule key shapes
+
+```toml
+# required_sections: per-directive map -> list of bold lead-ins that must
+# appear in each non-exempt body. Accepts `**Section.**` or `**Section**`.
+[tool.patdhlk-skills.lint.required_sections]
+arch-decision = ["Context", "Decision", "Consequences"]
+
+# nontrivial_body: per-directive map -> minimum body length in characters.
+# (Paired with max_body_length if you also want a ceiling.)
+[tool.patdhlk-skills.lint.nontrivial_body]
+issue = 200
+
+# max_body_length: per-directive map -> maximum body length in characters.
+[tool.patdhlk-skills.lint.max_body_length]
+issue = 5000
+
+# weasel_words: flag vague terms in targeted directives.
+# A word is exempt when its sentence contains a digit or a comparison cue
+# (`<`, `>`, `=`, "at least", "at most", "within", "no more than", "exactly").
+[tool.patdhlk-skills.lint.weasel_words]
+words      = ["significant", "appropriate", "robust"]
+directives = ["req"]
+
+# unenumerated_quantifiers: flag quantifiers not followed by an enumeration cue
+# ("of the", "of these", "listed", "in the", "declared", "configured",
+# "below", "above") within the same sentence.
+[tool.patdhlk-skills.lint.unenumerated_quantifiers]
+quantifiers = ["all", "every", "each"]
+directives  = ["req"]
+```
+
+### Worked example (this repo's actual config)
+
+```toml
+# gate.exempt_statuses is the default ["done","wontfix"]; needs with those
+# statuses are fully skipped by lint.
+[tool.patdhlk-skills.lint.required_sections]
+arch-decision = ["Context", "Decision", "Consequences"]
+
+[tool.patdhlk-skills.lint.nontrivial_body]
+# Shortest active issue body: 539 chars — threshold 200 gives ~2.7× headroom.
+issue = 200
+```
+
+`pds lint` exits 0 with `{"findings":[]}` when all non-exempt needs pass.
+Raise `nontrivial_body.issue` above 539 and lint flags `ISSUE_0018` with
+`"check":"lint:body-length", "need":"ISSUE_0018"` — the dogfood bites.
+
+weasel_words and unenumerated_quantifiers are not enabled here because this
+repo has no active `req` directives in the corpus; enabling them would
+require targeting `issue` or `arch-decision` bodies, which are narrative
+rather than formal requirements.
+
+## §10 Forward-looking pds config (rubrics / verdicts — not yet shipped)
+
+These tables let later `pds` verbs (verdict-check, not yet shipped) read
+project policy from config. Today's `pds` IGNORES them — offer to scaffold
+only with the user's understanding that they are forward-looking. Absent
+tables = those future checks are off (ADR_0014). Mark them clearly.
 
 ```toml
 # Forward-looking — declared for future `pds` verbs; today's pds ignores these.
-[tool.patdhlk-skills.lint]
-# rules the future `pds lint` verb will enforce; semantics live in the skills
 
 # ADR_0016: rubric axes are DECLARED in config; their semantics live in the
 # review skills, not here.

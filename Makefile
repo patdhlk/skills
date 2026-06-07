@@ -1,8 +1,15 @@
 # Makefile for the patdhlk-skills spec.
 # Commands run through `uv run` so the project's pinned tools are used.
+#
+# The gate (strict/needs) runs through `pds`, the repo's own CLI. When `pds`
+# is on PATH it is used directly; otherwise we fall back to `cargo run` against
+# the in-tree crate (cli/), so the gate works for any contributor with Rust.
 
 SOURCEDIR = spec
 BUILDDIR  = spec/_build
+
+# `pds` from PATH if present, else a quiet `cargo run` against the in-tree crate.
+PDS = $(shell command -v pds 2>/dev/null || echo "cargo run -q --manifest-path cli/Cargo.toml -p pds-cli --")
 
 .PHONY: help html strict needs serve clean
 
@@ -11,26 +18,25 @@ BUILDDIR  = spec/_build
 help:  ## List available targets
 	@echo "Available targets:"
 	@echo "  help    Show this help (default)"
-	@echo "  html    Build the HTML spec into $(BUILDDIR)/html"
-	@echo "  strict  Strict build gate: warnings are errors (ADR_0007)"
-	@echo "  needs   Build needs.json (ubc preferred, sphinx-build fallback — ADR_0006)"
+	@echo "  html    Build the HTML docs into $(BUILDDIR)/html (NOT the gate)"
+	@echo "  strict  Strict gate via 'pds check': needs build + strict diagnostics (ADR_0007, ADR_0017)"
+	@echo "  needs   Build a fresh needs.json via 'pds build' (ADR_0006)"
 	@echo "  serve   Live preview with auto-rebuild on http://localhost:8000"
 	@echo "  clean   Remove $(BUILDDIR)"
 
-html:  ## Build the HTML spec
+html:  ## Build the HTML docs (NOT the gate — ADR_0017 demotes html to docs-only)
 	uv run sphinx-build -b html "$(SOURCEDIR)" "$(BUILDDIR)/html"
 
-strict:  ## Strict build gate — every mutation must pass this (ADR_0007)
-	uv run sphinx-build -W -b html "$(SOURCEDIR)" "$(BUILDDIR)/html"
+strict:  ## Strict gate — every mutation must pass this (ADR_0007, ADR_0017)
+	# ADR_0017: the gate builds needs, not html. `pds check` runs the
+	# builder's strict diagnostics and emits a fresh needs.json; html is
+	# no longer gating (see the `html` target / the `docs` CI job).
+	$(PDS) check
 
-needs:  ## Build needs.json for querying (ADR_0006)
-	@mkdir -p "$(BUILDDIR)/needs"
-	@if command -v ubc >/dev/null 2>&1; then \
-		ubc build needs --outpath "$(BUILDDIR)/needs/needs.json"; \
-	else \
-		uv run sphinx-build -b needs "$(SOURCEDIR)" "$(BUILDDIR)/needs"; \
-	fi
-	@echo "needs.json written under $(BUILDDIR)/needs/"
+needs:  ## Build a fresh needs.json for querying (ADR_0006)
+	# `pds build` owns the per-builder adapter (ubc preferred, sphinx
+	# fallback) — no hand-rolled branching here anymore.
+	$(PDS) build
 
 serve:  ## Live preview with auto-rebuild (port 8000)
 	uv run sphinx-autobuild "$(SOURCEDIR)" "$(BUILDDIR)/html"

@@ -121,9 +121,7 @@ pub fn verdict_check_corpus(
 
         // ID shape + judged-need existence.
         let judged_id = vneed.id.strip_prefix("VERDICT_").map(str::to_string);
-        let judged = judged_id
-            .as_deref()
-            .and_then(|id| corpus.iter().find(|n| n.id == id));
+        let judged = judged_id.as_deref().and_then(|id| corpus.get(id));
 
         let mut malformed: Vec<String> = Vec::new();
         if judged_id.is_none() {
@@ -232,15 +230,14 @@ pub fn verdict_check_corpus(
         }
         let vid = verdict_id(&need.id);
         let verdict = corpus
-            .iter()
-            .find(|n| n.id == vid && n.need_type == verdict_directive);
+            .get(&vid)
+            .filter(|v| v.need_type == verdict_directive);
         match verdict {
             None => findings.push(VerdictFinding {
                 bucket: Bucket::Missing,
                 need: need.id.clone(),
                 message: format!(
-                    "no verdict on file: {} requires rubric {required_rubric:?} \
-                     (expected {vid})",
+                    "missing verdict {vid}: {} requires rubric {required_rubric:?}",
                     need.need_type
                 ),
             }),

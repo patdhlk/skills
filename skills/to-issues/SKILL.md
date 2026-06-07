@@ -39,8 +39,29 @@ shipped together. Every issue must state:
 Mark issues an agent can finish unattended `ready-for-agent`; ones needing
 human judgment, credentials, or design taste `ready-for-human`.
 
-Present the slicing plan (issue titles + req IDs each covers) and get the
-user's go-ahead **before** filing anything.
+**Dedup pass (sphinx-needs backend only).** Before presenting the plan, run
+`pds dedup "<slice title + body draft>"` (full text, not bare title — short
+queries over-gate per ADR_0021) for each candidate slice. Branch on exit code
+(ADR_0014):
+
+- Exit 0 — slice is clean; include it as-is.
+- Exit 1 — collision detected; annotate the slice row in the plan table:
+  - Open-issue hit: "slice N collides with ISSUE_XXXX — propose extending its
+    `:implements:` instead."
+  - Done-issue or ADR hit: "slice N matches ISSUE_XXXX (done) / ADR_XXXX
+    (accepted) — requirement may already be shipped/decided; consider dropping
+    this slice."
+- Exit 2 — stop and escalate.
+
+If `pds` is missing from PATH, emit one loud line pointing to
+`/setup-patdhlk-skills` and skip the dedup enrichment (the skill functioned
+without dedup until this version).
+
+On the **github backend** `pds dedup` exits 2 (no v1 driver); note this in
+the plan and rely on the existing manual judgment — unchanged.
+
+Present the slicing plan (issue titles + req IDs each covers, plus any
+collision annotations) and get the user's go-ahead **before** filing anything.
 
 ### 3a. File — sphinx-needs backend
 

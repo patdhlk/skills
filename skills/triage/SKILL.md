@@ -37,10 +37,28 @@ Empty queue → say so and stop.
 
 ### 2. Route each issue
 
+Before routing, gather search evidence for each issue (sphinx-needs backend
+only). If `pds` is not on PATH, print a loud warning pointing to
+`/setup-patdhlk-skills` and skip this enrichment step.
+
+```bash
+pds search "<issue title> <issue body>" --config ubproject.toml
+# exit 0 → hits JSON; exit 2 → stop and escalate
+```
+
+Use the full title + body as the query (ADR_0021 saturation). The top hit
+is the issue under triage itself — **skip it**; judge the remaining
+hits. A high-scoring hit on a `done` issue or an
+`arch-decision` means the report is already shipped; a high-scoring hit on
+another open issue means it may be a duplicate. Feed both signals into
+rule 1 below. The github backend keeps its existing `gh issue list`
+judgment; `pds search` is not available there.
+
 Apply in order — first match wins:
 
 1. **Duplicate / invalid / out of scope** → `wontfix`, with a one-line
-   reason (and the duplicate's ID if any).
+   reason (and the duplicate's ID if any). Use the search hits above as
+   evidence — cite the twin's ID when recommending duplicate.
 2. **Cannot be acted on as written** — missing repro, ambiguous scope, no
    way to verify → `needs-info`, writing the concrete question.
 3. **An agent can finish it unattended** — clear acceptance criteria, no

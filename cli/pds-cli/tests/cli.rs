@@ -1344,3 +1344,39 @@ fn dedup_github_backend_is_tool_error() {
     assert_eq!(json["verb"], "dedup");
     assert_eq!(json["error"]["kind"], "tool");
 }
+
+#[cfg(unix)]
+#[test]
+fn dedup_build_failure_surfaces_findings_under_dedup_verb() {
+    // On a failed build the exit-1 payload is findings-shaped — no verdict,
+    // threshold, or engine keys. Pins the BuildFailed pass-through for dedup.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let script = root.join("fake-sphinx.sh");
+    write_script(&script, FAKE_SPHINX_FAIL);
+    std::fs::create_dir_all(root.join("spec")).unwrap();
+    let config = root.join("ubproject.toml");
+    let toml = format!(
+        "[[needs.types]]\ndirective = \"issue\"\n\n\
+         [tool.patdhlk-skills]\nbuilder = \"sphinx-build\"\nspec_dir = \"spec\"\n\n\
+         [tool.patdhlk-skills.gate]\nsphinx_command = [\"{}\"]\n\n\
+         [tool.patdhlk-skills.roles]\nissue = \"issue\"\n",
+        script.display()
+    );
+    std::fs::write(&config, toml).unwrap();
+
+    let assert = pds()
+        .arg("dedup")
+        .arg("anything")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.failure().code(1).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).expect("stdout is one JSON object");
+    assert_eq!(json["verb"], "dedup");
+    let findings = json["findings"].as_array().expect("findings array");
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0]["check"], "build");
+    assert!(json.get("verdict").is_none(), "no verdict on build failure");
+}

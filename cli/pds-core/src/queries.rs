@@ -128,7 +128,7 @@ pub(crate) fn issue_directive(config: &Config) -> Result<&str, Error> {
         .ok_or_else(|| Error::Config {
             message: format!(
                 "role {ISSUE_ROLE:?} is not defined in [tool.patdhlk-skills.roles]; \
-                 both `pds status` and `pds next` require it"
+                 `pds status`, `pds next`, and `pds dedup` all require it"
             ),
         })
 }

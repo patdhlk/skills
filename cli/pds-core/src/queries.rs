@@ -94,7 +94,7 @@ pub(crate) fn next_payload(need: &Need) -> Map<String, Value> {
 
 /// The result of the shared build+load step: either a ready corpus or a
 /// pre-formed failed [`Outcome`] to return directly to the caller.
-enum CorpusResult {
+pub(crate) enum CorpusResult {
     Ready(NeedsCorpus),
     BuildFailed(Outcome),
 }
@@ -116,7 +116,7 @@ fn guard_backend(config: &Config, gh_hint: &str) -> Result<(), Error> {
 /// Resolve the directive string that identifies issue-typed needs, or an
 /// [`Error::Config`] naming the missing role when the role map has no `issue`
 /// entry.
-fn issue_directive(config: &Config) -> Result<&str, Error> {
+pub(crate) fn issue_directive(config: &Config) -> Result<&str, Error> {
     config
         .roles
         .get(ISSUE_ROLE)
@@ -129,25 +129,38 @@ fn issue_directive(config: &Config) -> Result<&str, Error> {
         })
 }
 
-/// Guard the backend, resolve the issue directive, run the non-gating build,
-/// and load the produced corpus. Returns either a ready corpus + directive
-/// string, or a failed build outcome to return directly, or an [`Error`].
+/// Guard the backend, run the non-gating build, and load the produced
+/// corpus. The shared preamble for every retrieval/query verb that does not
+/// need the issue role (e.g. `pds search`).
 ///
-/// This is the shared preamble for every backlog-query verb. Future verbs
-/// (lint, search, dedup, …) call this and add only their own pure query.
-fn prepare_corpus(
+/// Future corpus verbs call one of these two preambles and add only their
+/// own pure query.
+// Used by retrieval (Task 6) — remove this allow when run_search lands.
+#[allow(dead_code)]
+pub(crate) fn load_fresh_corpus(
+    config: &Config,
+    project_root: &Path,
+    gh_hint: &str,
+) -> Result<CorpusResult, Error> {
+    guard_backend(config, gh_hint)?;
+    let build = run_build(config, project_root)?;
+    if build.is_failed() {
+        return Ok(CorpusResult::BuildFailed(build));
+    }
+    let corpus = NeedsCorpus::load(&config.needs_json)?;
+    Ok(CorpusResult::Ready(corpus))
+}
+
+/// [`load_fresh_corpus`] plus issue-role resolution — the preamble for verbs
+/// that filter or gate on issue-typed needs (`status`, `next`, `dedup`).
+pub(crate) fn prepare_corpus(
     config: &Config,
     project_root: &Path,
     gh_hint: &str,
 ) -> Result<(CorpusResult, String), Error> {
-    guard_backend(config, gh_hint)?;
     let directive = issue_directive(config)?.to_string();
-    let build = run_build(config, project_root)?;
-    if build.is_failed() {
-        return Ok((CorpusResult::BuildFailed(build), directive));
-    }
-    let corpus = NeedsCorpus::load(&config.needs_json)?;
-    Ok((CorpusResult::Ready(corpus), directive))
+    let corpus_result = load_fresh_corpus(config, project_root, gh_hint)?;
+    Ok((corpus_result, directive))
 }
 
 // ---------------------------------------------------------------------------

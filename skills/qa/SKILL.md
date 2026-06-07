@@ -14,12 +14,14 @@ short confirmations, no interrogations. Everything files at
 ### 1. Open the session
 
 Read `[tool.patdhlk-skills]` from `ubproject.toml` (missing → point to
-`/setup-patdhlk-skills`). Build the dedup corpus:
+`/setup-patdhlk-skills`).
 
-- **sphinx-needs**: fresh needs.json (ADR_0006) — all existing issues
-  (any status) plus glossary terms, so reports get written in the repo's
-  domain language.
-- **github**: `gh issue list --state all --limit 200` titles.
+- **sphinx-needs**: read glossary terms from needs.json (ADR_0006) so
+  reports get written in the repo's domain language. `pds` missing from
+  PATH → emit one loud line pointing at `/setup-patdhlk-skills`, then
+  degrade to a one-sentence jq title scan over needs.json.
+- **github**: `gh issue list --state all --limit 200` title matching.
+  (`pds dedup` exits 2 on the github backend — no v1 driver.)
 
 Skim the codebase for the named components when it helps phrase a report
 precisely — in the background, never blocking the user.
@@ -32,9 +34,21 @@ precisely — in the background, never blocking the user.
 2. **Clarify at most once** — only if the report is unfilable as heard
    (e.g. no clue what action triggered it). Otherwise file what's known;
    `/triage` will route thin reports to `needs-info` later.
-3. **Dedup** against the corpus *and* this session's filings. On a likely
-   match, say so and ask: skip, or file anyway (genuinely different)?
-   Append new detail to the existing issue instead of filing a twin.
+3. **Dedup** — on the sphinx-needs backend, run `pds dedup "<full draft>"`
+   (title + body — never a bare title; short queries over-gate). Branch on
+   exit code:
+   - **exit 0**: proceed to file.
+   - **exit 1**: duplicate verdict — build one short status-aware ask from
+     the hits JSON (`{id, type, status, title, score}`): if the top hit is
+     an open issue, default ask is "append detail to ISSUE_xxxx instead?";
+     if the top hit is done or an ADR, ask "ISSUE_xxxx (done) — may already
+     be shipped — file as regression?". Never a hard block; never silent
+     filing.
+   - **exit 2**: tool/config error — stop and escalate.
+   On the github backend `pds dedup` exits 2; fall back to title matching
+   against the `gh issue list` corpus. Also consider this session's
+   declined and filed reports — `pds` rebuilds needs.json after each
+   filing, but declined reports are not in the corpus.
 4. **File** after a one-line confirmation ("Filing: <title> — ok?"):
 
    - *sphinx-needs*: rebuild needs.json, allocate dense max+1 ID

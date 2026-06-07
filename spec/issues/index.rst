@@ -507,7 +507,7 @@ The dogfooded backlog (:need:`ADR_0012`): every v1 skill port is an
 
 .. issue:: Wire issue-creating skills to pds dedup
    :id: ISSUE_0021
-   :status: ready-for-agent
+   :status: done
    :kind: improvement
    :implements: FEAT_0001
    :links: ISSUE_0017

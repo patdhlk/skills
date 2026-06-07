@@ -22,6 +22,7 @@ const B: f64 = 0.75;
 /// title tokens are repeated into the document. Poor man's BM25F.
 const TITLE_WEIGHT: usize = 3;
 const TAGS_WEIGHT: usize = 2;
+#[allow(dead_code)] // documents the weight for parity with TITLE_WEIGHT / TAGS_WEIGHT
 const CONTENT_WEIGHT: usize = 1;
 /// Hits are capped — ranked output below ~10 entries is noise for an agent.
 const MAX_HITS: usize = 10;
@@ -76,9 +77,8 @@ impl<'a> Index<'a> {
                     tokens.extend(tokenize(tag));
                 }
             }
-            for _ in 0..CONTENT_WEIGHT {
-                tokens.extend(tokenize(&need.content));
-            }
+            // CONTENT_WEIGHT = 1: direct append, no repetition.
+            tokens.extend(tokenize(&need.content));
             let len = tokens.len();
             let tf = term_frequencies(&tokens);
             docs.push(IndexedDoc { need, tf, len });
@@ -103,7 +103,9 @@ impl<'a> Index<'a> {
     /// empty corpus) return no hits.
     pub fn rank(&self, query: &str) -> Vec<Hit<'a>> {
         let query_tokens = tokenize(query);
-        if query_tokens.is_empty() || self.docs.is_empty() {
+        // Also bail when avg_len is zero: an all-empty-text corpus would
+        // otherwise divide by zero inside raw_score and NaN-poison every score.
+        if query_tokens.is_empty() || self.docs.is_empty() || self.avg_len <= 0.0 {
             return Vec::new();
         }
         let query_tf = term_frequencies(&query_tokens);
@@ -112,8 +114,9 @@ impl<'a> Index<'a> {
         // denominator (ADR_0021).  Using avg_len here (rather than
         // query_tokens.len()) eliminates the length-bonus that a very short
         // query would otherwise receive, ensuring that a document whose term
-        // frequencies are ≥ the query's will always score ≥ self_score and
-        // clamp to 1.0.  Always > 0 when the query has at least one token.
+        // frequencies are ≥ the query's *and whose length is ≤ avg_len* will
+        // always score ≥ self_score and clamp to 1.0.  Always > 0 when the
+        // query has at least one token.
         let self_score = self.raw_score(&query_tf, self.avg_len, &query_tf);
         if self_score <= 0.0 {
             return Vec::new();
@@ -239,8 +242,9 @@ mod tests {
 
     #[test]
     fn self_match_scores_one() {
-        // A query identical to a document's full text hits the normalization
-        // ceiling: score == 1.0 (clamped).
+        // The weighted document has higher tf than the query (title tokens
+        // repeated ×3), so the raw score exceeds the self-score and the
+        // clamp lands it at exactly 1.0.
         let corpus = corpus_from(RETRIEVAL_CORPUS);
         let index = Index::build(&corpus);
         let hits = index.rank("lint gate strict corpus checks");
@@ -320,6 +324,19 @@ mod tests {
         assert_eq!(hits[0].need.id, "ISSUE_0001");
         assert_eq!(hits[1].need.id, "ISSUE_0002");
         assert!((hits[0].score - hits[1].score).abs() < 1e-9);
+    }
+
+    #[test]
+    fn single_doc_corpus_scores_nonzero() {
+        let corpus = corpus_from(
+            r#"{"current_version":"","project":"t","versions":{"":{"needs":{
+            "ISSUE_0001":{"id":"ISSUE_0001","type":"issue","title":"lone entry"}
+        }}}}"#,
+        );
+        let index = Index::build(&corpus);
+        let hits = index.rank("lone entry");
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].score > 0.0 && hits[0].score <= 1.0);
     }
 
     #[test]

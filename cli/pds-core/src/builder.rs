@@ -257,6 +257,7 @@ mod tests {
             ],
             exempt_statuses: vec!["done".to_string(), "wontfix".to_string()],
             lint: None,
+            dedup_threshold: crate::retrieval::DEFAULT_THRESHOLD,
         }
     }
 

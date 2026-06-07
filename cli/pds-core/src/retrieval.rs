@@ -26,6 +26,10 @@ const TAGS_WEIGHT: usize = 2;
 const CONTENT_WEIGHT: usize = 1;
 /// Hits are capped — ranked output below ~10 entries is noise for an agent.
 const MAX_HITS: usize = 10;
+/// The shipped dedup threshold when `[tool.patdhlk-skills.dedup]` has none.
+/// Chosen by eyeballing real hits against this repo's corpus (final task of
+/// the ISSUE_0017 plan tunes and re-records this value).
+pub const DEFAULT_THRESHOLD: f64 = 0.35;
 
 /// A ranked retrieval hit: a need plus its normalized 0–1 score.
 pub struct Hit<'a> {

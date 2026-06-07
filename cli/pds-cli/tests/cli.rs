@@ -999,6 +999,50 @@ exit 0
     assert!(!out.stderr.is_empty(), "stderr should carry a human line");
 }
 
+/// A fake sphinx-build that writes a needs.json with TWO req needs carrying the
+/// same violating body: REQ_0001 has `"status":"done"` (exempt by default) and
+/// REQ_0002 has no status field (never exempt). Pins ISSUE_0018.
+#[cfg(unix)]
+const FAKE_SPHINX_LINT_EXEMPT_MIX: &str = r#"#!/bin/sh
+touch "$(dirname "$0")/built.marker"
+outdir="$(eval echo \${$#})"
+mkdir -p "$outdir"
+cat > "$outdir/needs.json" <<'JSON'
+{
+  "current_version": "",
+  "project": "t",
+  "versions": { "": { "needs": {
+    "REQ_0001": {"id":"REQ_0001","type":"req","title":"r","content":"All inputs shall be robust.","status":"done"},
+    "REQ_0002": {"id":"REQ_0002","type":"req","title":"s","content":"All inputs shall be robust."}
+  } } }
+}
+JSON
+exit 0
+"#;
+
+#[cfg(unix)]
+#[test]
+fn lint_exempts_done_status_needs_but_not_statusless_ones() {
+    // ISSUE_0018 contract through the binary: gate.exempt_statuses (default
+    // done/wontfix) excludes terminal needs from lint; absence of a status
+    // is not "done".
+    let (_tmp, config) = lint_project(FAKE_SPHINX_LINT_EXEMPT_MIX, LINT_TABLE_REQ);
+
+    let assert = pds().arg("lint").arg("--config").arg(&config).assert();
+    let out = assert.failure().code(1).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).expect("stdout is one JSON object");
+    let findings = json["findings"].as_array().expect("findings array");
+    assert!(
+        findings.iter().all(|f| f["need"] == "REQ_0002"),
+        "only the statusless need may be flagged, got: {findings:?}"
+    );
+    assert!(
+        !findings.is_empty(),
+        "the statusless need must be flagged (no status is never exempt)"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn check_with_builder_failure_does_not_run_lint() {

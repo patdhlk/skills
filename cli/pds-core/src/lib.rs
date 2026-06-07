@@ -21,4 +21,4 @@ pub use needs::{Need, NeedsCorpus};
 pub use outcome::Outcome;
 pub use project::Project;
 pub use queries::{next_issue, run_next, run_status, status_counts};
-pub use retrieval::{Hit, Index, dedup_verdict, tokenize};
+pub use retrieval::{DEFAULT_THRESHOLD, Hit, Index, dedup_verdict, run_search, tokenize};

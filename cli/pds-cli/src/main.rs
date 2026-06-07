@@ -32,6 +32,11 @@ enum Commands {
     Status,
     /// Report the next actionable (ready-for-agent) issue.
     Next,
+    /// Rank needs by similarity to a query (always exit 0).
+    Search {
+        /// The query text.
+        query: String,
+    },
 }
 
 impl Commands {
@@ -42,6 +47,7 @@ impl Commands {
             Commands::Lint => "lint",
             Commands::Status => "status",
             Commands::Next => "next",
+            Commands::Search { .. } => "search",
         }
     }
 }
@@ -74,12 +80,13 @@ fn main() -> ExitCode {
 fn run(cli: &Cli) -> Result<Outcome, Error> {
     let project = resolve_project(cli)?;
     let config = Config::load(&project)?;
-    match cli.command {
+    match &cli.command {
         Commands::Build => pds_core::run_build(&config, &project.root),
         Commands::Check => pds_core::run_check(&config, &project.root),
         Commands::Lint => pds_core::run_lint(&config, &project.root),
         Commands::Status => pds_core::run_status(&config, &project.root),
         Commands::Next => pds_core::run_next(&config, &project.root),
+        Commands::Search { query } => pds_core::run_search(&config, &project.root, query),
     }
 }
 

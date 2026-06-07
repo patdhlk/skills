@@ -1021,3 +1021,103 @@ fn check_with_builder_failure_does_not_run_lint() {
         "no lint findings when the build failed"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `pds search` / `pds dedup` E2E — retrieval verbs (unix-only: fake builders).
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+#[test]
+fn search_ranks_hits_with_engine_and_normalized_scores() {
+    // No roles table: search must not require the issue role.
+    let (_tmp, config) = backlog_project("", "");
+
+    let assert = pds()
+        .arg("search")
+        .arg("ready")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.success().code(0).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).expect("stdout is one JSON object");
+    assert_eq!(json["schema"], 1);
+    assert_eq!(json["verb"], "search");
+    assert_eq!(json["engine"], "bm25");
+    let hits = json["hits"].as_array().expect("hits array");
+    assert!(!hits.is_empty(), "\"ready\" appears in two issue titles");
+    for h in hits {
+        assert!(h["id"].is_string());
+        assert!(h["type"].is_string());
+        assert!(h["title"].is_string());
+        // status may be null (ISSUE_0005 has none) but the key must exist.
+        assert!(h.get("status").is_some());
+        let score = h["score"].as_f64().expect("score is a number");
+        assert!(score > 0.0 && score <= 1.0, "score {score} outside (0, 1]");
+    }
+    let ids: Vec<&str> = hits.iter().map(|h| h["id"].as_str().unwrap()).collect();
+    assert!(ids.contains(&"ISSUE_0001"), "got: {ids:?}");
+    assert!(ids.contains(&"ISSUE_0004"), "got: {ids:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn search_with_no_matches_is_clean_empty_hits() {
+    let (_tmp, config) = backlog_project("", "");
+
+    let assert = pds()
+        .arg("search")
+        .arg("zebra astronomy quantum")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.success().code(0).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["verb"], "search");
+    assert!(json["hits"].as_array().unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn search_empty_query_is_config_error() {
+    let (_tmp, config) = backlog_project("", "");
+
+    let assert = pds()
+        .arg("search")
+        .arg("   ")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.failure().code(2).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["verb"], "search");
+    assert_eq!(json["error"]["kind"], "config");
+}
+
+#[cfg(unix)]
+#[test]
+fn search_github_backend_is_tool_error_naming_gh() {
+    let (_tmp, config) = backlog_project("issue_backend = \"github\"\n", "");
+
+    let assert = pds()
+        .arg("search")
+        .arg("anything")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.failure().code(2).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["verb"], "search");
+    assert_eq!(json["error"]["kind"], "tool");
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("gh search issues"),
+        "got: {}",
+        json["error"]["message"]
+    );
+}

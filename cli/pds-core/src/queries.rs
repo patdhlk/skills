@@ -10,6 +10,10 @@
 //! The pure query functions ([`status_counts`], [`next_issue`]) take a
 //! `&NeedsCorpus` plus the resolved issue-role directive string and return
 //! plain data, so they are lib-testable without spawning a builder.
+//!
+//! [`load_fresh_corpus`] and [`issue_directive`] are the shared preambles for
+//! the retrieval verbs (`pds search`, `pds dedup`) whose ranking logic lives
+//! in `retrieval.rs`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -135,8 +139,6 @@ pub(crate) fn issue_directive(config: &Config) -> Result<&str, Error> {
 ///
 /// Future corpus verbs call one of these two preambles and add only their
 /// own pure query.
-// Used by retrieval (Task 6) — remove this allow when run_search lands.
-#[allow(dead_code)]
 pub(crate) fn load_fresh_corpus(
     config: &Config,
     project_root: &Path,

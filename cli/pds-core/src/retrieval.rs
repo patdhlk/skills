@@ -10,8 +10,15 @@
 //! constants, not configuration — they are implementation, not contract.
 
 use std::collections::HashMap;
+use std::path::Path;
 
+use serde_json::{Map, Value, json};
+
+use crate::config::Config;
+use crate::error::Error;
 use crate::needs::{Need, NeedsCorpus};
+use crate::outcome::Outcome;
+use crate::queries::{CorpusResult, load_fresh_corpus};
 
 /// Okapi BM25 term-frequency saturation parameter. Standard value; not
 /// configurable — nobody should tune this per-repo.
@@ -206,6 +213,51 @@ pub fn tokenize(text: &str) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(|s| s.to_lowercase())
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Orchestration (guard → build → load → rank → Outcome)
+// ---------------------------------------------------------------------------
+
+/// Assemble the shared hits array: `[{id, type, status, title, score}]`
+/// (ADR_0021 — `engine` is top-level, not per hit).
+fn hits_payload(hits: &[Hit<'_>]) -> Value {
+    Value::Array(
+        hits.iter()
+            .map(|h| {
+                json!({
+                    "id": h.need.id,
+                    "type": h.need.need_type,
+                    "status": h.need.status,
+                    "title": h.need.title,
+                    "score": h.score,
+                })
+            })
+            .collect(),
+    )
+}
+
+/// `pds search`: rank all need types against the query from a fresh corpus.
+/// Pure ranking — no threshold, always a clean outcome (exit 0); exit 2 is
+/// reserved for tool/config errors, including an empty query.
+pub fn run_search(config: &Config, project_root: &Path, query: &str) -> Result<Outcome, Error> {
+    if query.trim().is_empty() {
+        return Err(Error::Config {
+            message: "search query must not be empty".to_string(),
+        });
+    }
+    let gh_hint = "gh search issues --state all \"<query>\"";
+    let corpus = match load_fresh_corpus(config, project_root, gh_hint)? {
+        CorpusResult::Ready(c) => c,
+        CorpusResult::BuildFailed(failed) => return Ok(failed),
+    };
+    let index = Index::build(&corpus);
+    let hits = index.rank(query);
+
+    let mut payload = Map::new();
+    payload.insert("engine".to_string(), Value::String("bm25".to_string()));
+    payload.insert("hits".to_string(), hits_payload(&hits));
+    Ok(Outcome::clean(payload))
 }
 
 #[cfg(test)]

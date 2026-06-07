@@ -177,6 +177,20 @@ impl<'a> Index<'a> {
     }
 }
 
+/// The dedup verdict over ranked hits: `"duplicate"` iff at least one
+/// **issue-typed** hit reaches the threshold (ADR_0021). Non-issue hits
+/// (ADRs, feats, terms) inform the agent but never gate the filing.
+pub fn dedup_verdict(hits: &[Hit<'_>], issue_directive: &str, threshold: f64) -> &'static str {
+    if hits
+        .iter()
+        .any(|h| h.need.need_type == issue_directive && h.score >= threshold)
+    {
+        "duplicate"
+    } else {
+        "unique"
+    }
+}
+
 /// Lowercase the text and split it on non-alphanumeric boundaries.
 ///
 /// No stemming, no stopword list: IDF already crushes ubiquitous terms, and
@@ -337,6 +351,44 @@ mod tests {
         let hits = index.rank("lone entry");
         assert_eq!(hits.len(), 1);
         assert!(hits[0].score > 0.0 && hits[0].score <= 1.0);
+    }
+
+    /// Hits fixture: needs from the corpus pinned at given scores.
+    fn fixture_hits<'a>(corpus: &'a NeedsCorpus, scores: &[(&str, f64)]) -> Vec<Hit<'a>> {
+        scores
+            .iter()
+            .map(|(id, score)| Hit {
+                need: corpus.iter().find(|n| n.id == *id).unwrap(),
+                score: *score,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn issue_hit_at_threshold_is_duplicate() {
+        let corpus = corpus_from(RETRIEVAL_CORPUS);
+        let hits = fixture_hits(&corpus, &[("ISSUE_0001", 0.5)]);
+        assert_eq!(dedup_verdict(&hits, "issue", 0.5), "duplicate");
+    }
+
+    #[test]
+    fn issue_hit_below_threshold_is_unique() {
+        let corpus = corpus_from(RETRIEVAL_CORPUS);
+        let hits = fixture_hits(&corpus, &[("ISSUE_0001", 0.49)]);
+        assert_eq!(dedup_verdict(&hits, "issue", 0.5), "unique");
+    }
+
+    #[test]
+    fn non_issue_hit_above_threshold_never_gates() {
+        // The ADR scores 0.9 but is not issue-typed: verdict stays unique.
+        let corpus = corpus_from(RETRIEVAL_CORPUS);
+        let hits = fixture_hits(&corpus, &[("ADR_0001", 0.9), ("ISSUE_0001", 0.2)]);
+        assert_eq!(dedup_verdict(&hits, "issue", 0.5), "unique");
+    }
+
+    #[test]
+    fn empty_hits_are_unique() {
+        assert_eq!(dedup_verdict(&[], "issue", 0.5), "unique");
     }
 
     #[test]

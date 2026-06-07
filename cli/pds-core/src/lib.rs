@@ -14,7 +14,7 @@ pub use builder::{BuildCommand, build_command, run_build};
 pub use checker::{CheckStep, check_commands, run_check};
 pub use config::{
     Builder, Config, IssueBackend, LintBodyLength, LintConfig, LintUnenumeratedQuantifiers,
-    LintWeaselWords,
+    LintWeaselWords, VerdictsConfig,
 };
 pub use error::Error;
 pub use lint::{LintFinding, lint_corpus, run_lint};

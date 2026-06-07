@@ -74,6 +74,18 @@ pub struct LintUnenumeratedQuantifiers {
     pub directives: Vec<String>,
 }
 
+/// Validated `[tool.patdhlk-skills.verdicts]` table (ADR_0016 + the
+/// ISSUE_0014 `statuses` scoping amendment).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerdictsConfig {
+    /// Need type → required rubric name. Non-empty; every key is a declared
+    /// directive, every value a declared rubric.
+    pub require: HashMap<String, String>,
+    /// Statuses in which a verdict is demanded. `None` = all non-exempt
+    /// statuses (including statusless needs). Non-empty when `Some`.
+    pub statuses: Option<Vec<String>>,
+}
+
 /// Validated lint configuration from `[tool.patdhlk-skills.lint]`.
 ///
 /// `None` on any field means that rule is disabled.  The table may be present
@@ -136,6 +148,12 @@ pub struct Config {
     /// `[tool.patdhlk-skills.dedup]`; defaults to
     /// [`crate::retrieval::DEFAULT_THRESHOLD`] when absent.
     pub dedup_threshold: f64,
+    /// Declared rubrics: name → axis list (`[tool.patdhlk-skills.rubrics.<name>]`).
+    /// Empty when no rubrics are declared. Axes are non-empty, unique strings.
+    pub rubrics: HashMap<String, Vec<String>>,
+    /// Verdict requirements (`None` when the table is absent — verdict-check
+    /// is then a clean no-op, the lint activation model).
+    pub verdicts: Option<VerdictsConfig>,
 }
 
 impl Config {
@@ -174,6 +192,8 @@ impl Config {
             gate: raw_gate,
             lint: raw_lint,
             dedup: raw_dedup,
+            rubrics: raw_rubrics,
+            verdicts: raw_verdicts,
         } = doc.tool.and_then(|t| t.patdhlk_skills).unwrap_or_default();
 
         // spec_dir: tool > project.srcdir > "spec"
@@ -295,6 +315,14 @@ impl Config {
             None => crate::retrieval::DEFAULT_THRESHOLD,
         };
 
+        // rubrics tables
+        let rubrics = validate_rubrics(raw_rubrics)?;
+
+        // verdicts table
+        let verdicts = raw_verdicts
+            .map(|raw| validate_verdicts(raw, &declared_directives, &rubrics))
+            .transpose()?;
+
         Ok(Config {
             spec_dir,
             builder,
@@ -306,6 +334,8 @@ impl Config {
             exempt_statuses,
             lint,
             dedup_threshold,
+            rubrics,
+            verdicts,
         })
     }
 }
@@ -354,6 +384,21 @@ struct RawPatdhlkSkills {
     gate: Option<RawGate>,
     lint: Option<RawLintConfig>,
     dedup: Option<RawDedup>,
+    rubrics: Option<HashMap<String, RawRubric>>,
+    verdicts: Option<RawVerdicts>,
+}
+
+/// Raw `[tool.patdhlk-skills.rubrics.<name>]` — unknown keys ignored.
+#[derive(Deserialize)]
+struct RawRubric {
+    axes: Option<Vec<String>>,
+}
+
+/// Raw `[tool.patdhlk-skills.verdicts]` — unknown keys ignored.
+#[derive(Deserialize, Default)]
+struct RawVerdicts {
+    require: Option<HashMap<String, String>>,
+    statuses: Option<Vec<String>>,
 }
 
 /// Raw `[tool.patdhlk-skills.dedup]` — threshold optional; unknown keys ignored.
@@ -736,6 +781,96 @@ pub(crate) fn validate_threshold(value: f64, key: &str) -> Result<(), Error> {
         });
     }
     Ok(())
+}
+
+/// Validate `[tool.patdhlk-skills.rubrics.*]`: every rubric needs a
+/// non-empty `axes` list of non-empty, unique strings.
+fn validate_rubrics(
+    raw: Option<HashMap<String, RawRubric>>,
+) -> Result<HashMap<String, Vec<String>>, Error> {
+    let Some(raw) = raw else {
+        return Ok(HashMap::new());
+    };
+    let mut rubrics: HashMap<String, Vec<String>> = HashMap::new();
+    for (name, rubric) in raw {
+        let axes = rubric.axes.unwrap_or_default();
+        if axes.is_empty() {
+            return Err(Error::Config {
+                message: format!("rubrics.{name}: axes must be a non-empty list"),
+            });
+        }
+        if let Some(pos) = axes.iter().position(|a| a.is_empty()) {
+            return Err(Error::Config {
+                message: format!("rubrics.{name}: axis at index {pos} is an empty string"),
+            });
+        }
+        let mut seen: HashSet<&str> = HashSet::new();
+        for axis in &axes {
+            if !seen.insert(axis.as_str()) {
+                return Err(Error::Config {
+                    message: format!("rubrics.{name}: duplicate axis {axis:?}"),
+                });
+            }
+        }
+        rubrics.insert(name, axes);
+    }
+    Ok(rubrics)
+}
+
+/// Validate `[tool.patdhlk-skills.verdicts]` against declared directives and
+/// declared rubrics (ADR_0016: a require entry naming an undeclared rubric is
+/// a config hard error).
+fn validate_verdicts(
+    raw: RawVerdicts,
+    declared_directives: &HashSet<String>,
+    rubrics: &HashMap<String, Vec<String>>,
+) -> Result<VerdictsConfig, Error> {
+    let require = raw.require.unwrap_or_default();
+    if require.is_empty() {
+        return Err(Error::Config {
+            message: "verdicts table requires a non-empty `require` map \
+                      ({ <type> = \"<rubric>\" })"
+                .to_string(),
+        });
+    }
+    let mut entries: Vec<(&String, &String)> = require.iter().collect();
+    entries.sort();
+    for (need_type, rubric) in entries {
+        if !declared_directives.contains(need_type) {
+            return Err(Error::Config {
+                message: format!(
+                    "verdicts.require references undeclared [[needs.types]] \
+                     directive {need_type:?}"
+                ),
+            });
+        }
+        if !rubrics.contains_key(rubric) {
+            return Err(Error::Config {
+                message: format!(
+                    "verdicts.require[{need_type:?}] names undeclared rubric \
+                     {rubric:?}; declare [tool.patdhlk-skills.rubrics.{rubric}]"
+                ),
+            });
+        }
+    }
+    if let Some(ref statuses) = raw.statuses {
+        if statuses.is_empty() {
+            return Err(Error::Config {
+                message: "verdicts.statuses must not be an empty list; \
+                          remove the key to mean all non-exempt statuses"
+                    .to_string(),
+            });
+        }
+        if let Some(pos) = statuses.iter().position(|s| s.is_empty()) {
+            return Err(Error::Config {
+                message: format!("verdicts.statuses element at index {pos} is an empty string"),
+            });
+        }
+    }
+    Ok(VerdictsConfig {
+        require,
+        statuses: raw.statuses,
+    })
 }
 
 /// Join `root` and `rel` into an absolute, **lexically** normalised path.
@@ -2085,5 +2220,188 @@ future_engine_key = "embed"
         let (_tmp, project) = make_project(toml);
         let cfg = Config::load(&project).unwrap();
         assert_eq!(cfg.dedup_threshold, 1.0);
+    }
+
+    // ------------------------------------------------------------------
+    // rubrics + verdicts tables (ISSUE_0014 / ADR_0016)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn absent_rubrics_and_verdicts_yield_empty_and_none() {
+        let (_tmp, project) = make_project("[project]\nname = \"x\"");
+        let cfg = Config::load(&project).unwrap();
+        assert!(cfg.rubrics.is_empty());
+        assert!(cfg.verdicts.is_none());
+    }
+
+    #[test]
+    fn full_verdicts_config_parses() {
+        let toml = r#"
+[[needs.types]]
+directive = "issue"
+
+[tool.patdhlk-skills.rubrics.triage]
+axes = ["category", "state", "actionability"]
+
+[tool.patdhlk-skills.verdicts]
+require = { issue = "triage" }
+statuses = ["ready-for-agent", "in-progress"]
+"#;
+        let (_tmp, project) = make_project(toml);
+        let cfg = Config::load(&project).unwrap();
+        assert_eq!(
+            cfg.rubrics.get("triage").unwrap(),
+            &vec![
+                "category".to_string(),
+                "state".to_string(),
+                "actionability".to_string()
+            ]
+        );
+        let v = cfg.verdicts.as_ref().unwrap();
+        assert_eq!(v.require.get("issue").map(String::as_str), Some("triage"));
+        assert_eq!(
+            v.statuses.as_ref().unwrap(),
+            &vec!["ready-for-agent".to_string(), "in-progress".to_string()]
+        );
+    }
+
+    #[test]
+    fn verdicts_statuses_absent_is_none() {
+        let toml = r#"
+[[needs.types]]
+directive = "issue"
+
+[tool.patdhlk-skills.rubrics.triage]
+axes = ["category"]
+
+[tool.patdhlk-skills.verdicts]
+require = { issue = "triage" }
+"#;
+        let (_tmp, project) = make_project(toml);
+        let cfg = Config::load(&project).unwrap();
+        assert!(cfg.verdicts.unwrap().statuses.is_none());
+    }
+
+    #[test]
+    fn verdicts_require_undeclared_rubric_is_config_error() {
+        let toml = r#"
+[[needs.types]]
+directive = "issue"
+
+[tool.patdhlk-skills.verdicts]
+require = { issue = "review" }
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("review"),
+            "must name the undeclared rubric, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn verdicts_require_undeclared_type_is_config_error() {
+        let toml = r#"
+[[needs.types]]
+directive = "issue"
+
+[tool.patdhlk-skills.rubrics.triage]
+axes = ["category"]
+
+[tool.patdhlk-skills.verdicts]
+require = { story = "triage" }
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        assert!(err.to_string().contains("story"));
+    }
+
+    #[test]
+    fn verdicts_without_require_is_config_error() {
+        let toml = r#"
+[tool.patdhlk-skills.verdicts]
+statuses = ["in-progress"]
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        assert!(err.to_string().contains("require"));
+    }
+
+    #[test]
+    fn rubric_with_empty_axes_is_config_error() {
+        let toml = r#"
+[tool.patdhlk-skills.rubrics.triage]
+axes = []
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        assert!(err.to_string().contains("triage"));
+    }
+
+    #[test]
+    fn rubric_with_duplicate_axes_is_config_error() {
+        let toml = r#"
+[tool.patdhlk-skills.rubrics.triage]
+axes = ["category", "category"]
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        assert!(err.to_string().contains("category"));
+    }
+
+    #[test]
+    fn rubric_with_empty_string_axis_is_config_error() {
+        let toml = r#"
+[tool.patdhlk-skills.rubrics.triage]
+axes = ["category", ""]
+"#;
+        let (_tmp, project) = make_project(toml);
+        assert!(matches!(
+            Config::load(&project).unwrap_err(),
+            Error::Config { .. }
+        ));
+    }
+
+    #[test]
+    fn verdicts_empty_statuses_list_is_config_error() {
+        // An empty scope list would demand verdicts of nothing — config noise.
+        let toml = r#"
+[[needs.types]]
+directive = "issue"
+
+[tool.patdhlk-skills.rubrics.triage]
+axes = ["category"]
+
+[tool.patdhlk-skills.verdicts]
+require = { issue = "triage" }
+statuses = []
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        assert!(err.to_string().contains("statuses"));
+    }
+
+    #[test]
+    fn unknown_verdicts_keys_are_ignored() {
+        let toml = r#"
+[[needs.types]]
+directive = "issue"
+
+[tool.patdhlk-skills.rubrics.triage]
+axes = ["category"]
+
+[tool.patdhlk-skills.verdicts]
+require = { issue = "triage" }
+future_key = 7
+"#;
+        let (_tmp, project) = make_project(toml);
+        assert!(Config::load(&project).is_ok());
     }
 }

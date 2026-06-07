@@ -123,11 +123,19 @@ pub fn run_check(config: &Config, project_root: &Path) -> Result<Outcome, Error>
     // Both stages use builder_clean to run independently: lint findings and
     // verdict findings can coexist in the same array.
     let builder_clean = findings.is_empty();
+    // Load the corpus once, guarded: skip the disk read on plain projects where
+    // neither lint nor verdicts are configured.
+    let corpus =
+        if builder_clean && (any_rule_enabled(config.lint.as_ref()) || config.verdicts.is_some()) {
+            Some(NeedsCorpus::load(&config.needs_json)?)
+        } else {
+            None
+        };
     if builder_clean && any_rule_enabled(config.lint.as_ref()) {
-        let corpus = NeedsCorpus::load(&config.needs_json)?;
+        let corpus = corpus.as_ref().expect("builder_clean guarantees Some");
         let lint = config.lint.as_ref().expect("any_rule_enabled implies Some");
         let lint_findings = lint_corpus(
-            &corpus,
+            corpus,
             lint,
             &config.exempt_statuses,
             config.roles.get("verdict").map(String::as_str),
@@ -136,9 +144,9 @@ pub fn run_check(config: &Config, project_root: &Path) -> Result<Outcome, Error>
     }
     if builder_clean && let Some(verdicts) = config.verdicts.as_ref() {
         let directive = crate::verdicts::verdict_directive(config)?.to_string();
-        let corpus = NeedsCorpus::load(&config.needs_json)?;
+        let corpus = corpus.as_ref().expect("builder_clean guarantees Some");
         let vfindings = crate::verdicts::verdict_check_corpus(
-            &corpus,
+            corpus,
             verdicts,
             &config.rubrics,
             &directive,

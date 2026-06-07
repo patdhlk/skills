@@ -1653,6 +1653,7 @@ fn check_with_verdicts_table_appends_verdict_findings() {
     let findings = json["findings"].as_array().unwrap();
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0]["check"], "verdict:missing");
+    assert!(json["needs_json"].as_str().unwrap().ends_with("needs.json"));
 }
 
 #[cfg(unix)]
@@ -1704,6 +1705,84 @@ fn check_builder_failure_skips_verdict_check() {
     let findings = json["findings"].as_array().unwrap();
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0]["check"], "build");
+}
+
+/// A fake sphinx-build for the lint+verdict coexistence test: writes a
+/// needs.json with one `req` need (no status, body uses the weasel word
+/// "robust") and one `issue` need (status ready-for-agent). No verdict need is
+/// present, so the verdict stage fires a `verdict:missing` finding.
+#[cfg(unix)]
+const FAKE_SPHINX_LINT_AND_VERDICT: &str = r#"#!/bin/sh
+outdir="$(eval echo \${$#})"
+mkdir -p "$outdir"
+cat > "$outdir/needs.json" <<'JSON'
+{
+  "current_version": "",
+  "project": "t",
+  "versions": { "": { "needs": {
+    "REQ_0001":   {"id":"REQ_0001",  "type":"req",   "title":"r",         "content":"The system shall be robust."},
+    "ISSUE_0001": {"id":"ISSUE_0001","type":"issue",  "title":"the title", "content":"the body","status":"ready-for-agent"}
+  } } }
+}
+JSON
+exit 0
+"#;
+
+#[cfg(unix)]
+#[test]
+fn check_with_both_lint_and_verdict_tables_both_findings_coexist() {
+    // Both lint and verdict stages must run and contribute findings.
+    // Corpus: REQ_0001 (req, no status) body has weasel word "robust" →
+    // lint:weasel-words fires.  ISSUE_0001 (issue, ready-for-agent) has no
+    // matching verdict need → verdict:missing fires.  Total: 2 findings.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let script = root.join("fake-sphinx.sh");
+    write_script(&script, FAKE_SPHINX_LINT_AND_VERDICT);
+    std::fs::create_dir_all(root.join("spec")).unwrap();
+    let config = root.join("ubproject.toml");
+    let toml = format!(
+        "[[needs.types]]\ndirective = \"req\"\n\n\
+         [[needs.types]]\ndirective = \"issue\"\n\n\
+         [[needs.types]]\ndirective = \"verdict\"\n\n\
+         [tool.patdhlk-skills]\nbuilder = \"sphinx-build\"\nspec_dir = \"spec\"\n\n\
+         [tool.patdhlk-skills.gate]\nsphinx_command = [\"{}\"]\n\n\
+         [tool.patdhlk-skills.roles]\nissue = \"issue\"\nverdict = \"verdict\"\n\n\
+         [tool.patdhlk-skills.lint.weasel_words]\nwords = [\"robust\"]\ndirectives = [\"req\"]\n\n\
+         [tool.patdhlk-skills.rubrics.triage]\naxes = [\"category\"]\n\n\
+         [tool.patdhlk-skills.verdicts]\nrequire = {{ issue = \"triage\" }}\n\
+         statuses = [\"ready-for-agent\"]\n",
+        script.display()
+    );
+    std::fs::write(&config, toml).unwrap();
+
+    let assert = pds().arg("check").arg("--config").arg(&config).assert();
+    let out = assert.failure().code(1).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).expect("stdout is one JSON object");
+    assert_eq!(json["verb"], "check");
+    let findings = json["findings"].as_array().expect("findings array");
+    assert_eq!(
+        findings.len(),
+        2,
+        "lint finding + verdict finding must coexist"
+    );
+    let checks: Vec<&str> = findings
+        .iter()
+        .map(|f| f["check"].as_str().unwrap())
+        .collect();
+    assert!(
+        checks.iter().any(|c| c.starts_with("lint:")),
+        "one finding must carry the lint: prefix, got: {checks:?}"
+    );
+    assert!(
+        checks.iter().any(|&c| c == "verdict:missing"),
+        "one finding must be verdict:missing, got: {checks:?}"
+    );
+    assert!(
+        json["needs_json"].as_str().unwrap().ends_with("needs.json"),
+        "needs_json must be reported on non-builder failures"
+    );
 }
 
 #[cfg(unix)]

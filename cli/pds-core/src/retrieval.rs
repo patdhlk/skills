@@ -27,10 +27,9 @@ const K1: f64 = 1.2;
 const B: f64 = 0.75;
 /// Field weights: a title-term match should dominate a content match, so
 /// title tokens are repeated into the document. Poor man's BM25F.
+/// (Content is weight 1 — appended directly, no constant needed.)
 const TITLE_WEIGHT: usize = 3;
 const TAGS_WEIGHT: usize = 2;
-#[allow(dead_code)] // documents the weight for parity with TITLE_WEIGHT / TAGS_WEIGHT
-const CONTENT_WEIGHT: usize = 1;
 /// Hits are capped — ranked output below ~10 entries is noise for an agent.
 const MAX_HITS: usize = 10;
 /// The shipped dedup threshold when `[tool.patdhlk-skills.dedup]` has none.
@@ -90,7 +89,7 @@ impl<'a> Index<'a> {
                     tokens.extend(tokenize(tag));
                 }
             }
-            // CONTENT_WEIGHT = 1: direct append, no repetition.
+            // Content weight is 1: direct append, no repetition.
             tokens.extend(tokenize(&need.content));
             let len = tokens.len();
             let tf = term_frequencies(&tokens);

@@ -73,7 +73,7 @@ pub fn next_issue<'a>(corpus: &'a NeedsCorpus, issue_directive: &str) -> Option<
 ///
 /// Returns a map with `"issue"` (the need's id/title/status/links) and
 /// `"reason": null` — the null-reason shape for a found issue.
-pub fn next_payload(need: &Need) -> Map<String, Value> {
+pub(crate) fn next_payload(need: &Need) -> Map<String, Value> {
     let mut payload = Map::new();
     payload.insert(
         "issue".to_string(),

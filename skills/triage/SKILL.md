@@ -24,8 +24,10 @@ won't catch it, you must.
 Read `[tool.patdhlk-skills]` from `ubproject.toml` (missing → point to
 `/setup-patdhlk-skills`).
 
-- **sphinx-needs**: build a fresh needs.json (ADR_0006), queue = issues with
-  `status == "needs-triage"`, plus `needs-info` ones whose question got
+- **sphinx-needs**: `pds status` first — it rebuilds needs.json (ADR_0006)
+  and emits the per-status counts, the "what needs attention" buckets, in
+  one query. Then the queue = issues with `status == "needs-triage"` (jq
+  over the fresh needs.json), plus `needs-info` ones whose question got
   answered since.
 - **github**: `gh issue list --label needs-triage` **plus** open issues with
   no state label at all (treat unlabeled as needs-triage; offer to label
@@ -71,8 +73,9 @@ pds check
 
 Exit 0 means proceed; exit 1 means fix the corpus and re-run; exit 2 means
 stop and escalate.
-Report counts per verdict and the `ready-for-agent` list — that's the
-pickup queue for the next work session.
+Report counts per verdict (`pds status` after the gate shows the new
+buckets) and the `ready-for-agent` list — that's the pickup queue for the
+next work session; `pds next` returns its lowest-ID member as JSON.
 
 ## Hard rules
 

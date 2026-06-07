@@ -18,6 +18,10 @@ repo dogfoods its own system: backlog, decisions, and glossary live in
 - Query the corpus via needs.json, never by grepping RST: `make needs`
   (runs `pds build` under the hood), then `jq` on
   `spec/_build/needs/needs.json` (ADR_0006).
+- Backlog queries have dedicated verbs (each rebuilds needs.json first):
+  `pds status` = per-status issue counts; `pds next` = the lowest-ID
+  `ready-for-agent` issue (`{"issue": null, "reason": "none-ready"}` when
+  the backlog is clean). Ad-hoc reads stay `jq`.
 - New IDs: dense max+1 per prefix, from a fresh needs.json (ADR_0008).
 - **Every spec mutation must end with the strict gate: `make strict`**
   (= `pds check`, ADR_0017 — the per-builder gate that emits a fresh

@@ -551,3 +551,245 @@ fn check_missing_builder_program_is_tool_error() {
         "tool error should name the program, got: {msg}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `pds status` / `pds next` E2E — backlog queries (unix-only: fake builders).
+// ---------------------------------------------------------------------------
+
+/// A fake sphinx-build for the query verbs: invoked as `... -b needs <src>
+/// <outdir>`, it writes a needs.json into the outdir containing issues in
+/// several statuses (plus a non-issue need and a no-status issue), then exits 0.
+#[cfg(unix)]
+const FAKE_SPHINX_BACKLOG: &str = r#"#!/bin/sh
+echo "fake-sphinx: building backlog" >&2
+outdir="$(eval echo \${$#})"
+mkdir -p "$outdir"
+cat > "$outdir/needs.json" <<'JSON'
+{
+  "current_version": "",
+  "project": "t",
+  "versions": { "": { "needs": {
+    "ISSUE_0001": {"id":"ISSUE_0001","type":"issue","title":"first ready","status":"ready-for-agent","links":["FEAT_0001"]},
+    "ISSUE_0002": {"id":"ISSUE_0002","type":"issue","title":"done one","status":"done"},
+    "ISSUE_0003": {"id":"ISSUE_0003","type":"issue","title":"triage","status":"needs-triage"},
+    "ISSUE_0004": {"id":"ISSUE_0004","type":"issue","title":"second ready","status":"ready-for-agent"},
+    "ISSUE_0005": {"id":"ISSUE_0005","type":"issue","title":"no status"},
+    "FEAT_0001":  {"id":"FEAT_0001","type":"feat","title":"a feature","status":"done"}
+  } } }
+}
+JSON
+exit 0
+"#;
+
+/// Set up a project whose fake sphinx-build writes the backlog needs.json, with
+/// an `issue` role declared (and the matching `[[needs.types]]`). `extra` is
+/// appended to the `[tool.patdhlk-skills]` table (e.g. an issue_backend line).
+/// `roles` is the body of the `[tool.patdhlk-skills.roles]` table; when empty
+/// the roles table is omitted entirely.
+#[cfg(unix)]
+fn backlog_project(extra: &str, roles: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let script = root.join("fake-sphinx.sh");
+    write_script(&script, FAKE_SPHINX_BACKLOG);
+    std::fs::create_dir_all(root.join("spec")).unwrap();
+    let config = root.join("ubproject.toml");
+    let roles_table = if roles.is_empty() {
+        String::new()
+    } else {
+        format!("\n[tool.patdhlk-skills.roles]\n{roles}")
+    };
+    let toml = format!(
+        "[[needs.types]]\ndirective = \"issue\"\n\n\
+         [[needs.types]]\ndirective = \"feat\"\n\n\
+         [tool.patdhlk-skills]\nbuilder = \"sphinx-build\"\nspec_dir = \"spec\"\n{extra}\n\
+         [tool.patdhlk-skills.gate]\nsphinx_command = [\"{}\"]\n{roles_table}",
+        script.display()
+    );
+    std::fs::write(&config, toml).unwrap();
+    (tmp, config)
+}
+
+#[cfg(unix)]
+#[test]
+fn status_emits_per_status_counts() {
+    let (_tmp, config) = backlog_project("", "issue = \"issue\"\nfeature = \"feat\"\n");
+
+    let assert = pds().arg("status").arg("--config").arg(&config).assert();
+    let out = assert.success().code(0).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).expect("stdout is one JSON object");
+    assert_eq!(json["schema"], 1);
+    assert_eq!(json["verb"], "status");
+    let counts = &json["counts"];
+    assert_eq!(counts["ready-for-agent"], 2);
+    assert_eq!(counts["done"], 1);
+    assert_eq!(counts["needs-triage"], 1);
+    assert_eq!(counts["none"], 1);
+    // The non-issue feat (status done) must not bleed into the issue tally.
+    assert_eq!(json["total"], 5);
+    // The feat's "done" must not inflate the done count.
+    assert!(counts.get("feat").is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn next_emits_lowest_ready_issue_with_links() {
+    let (_tmp, config) = backlog_project("", "issue = \"issue\"\n");
+
+    let assert = pds().arg("next").arg("--config").arg(&config).assert();
+    let out = assert.success().code(0).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).expect("stdout is one JSON object");
+    assert_eq!(json["schema"], 1);
+    assert_eq!(json["verb"], "next");
+    let issue = &json["issue"];
+    assert_eq!(issue["id"], "ISSUE_0001");
+    assert_eq!(issue["title"], "first ready");
+    assert_eq!(issue["status"], "ready-for-agent");
+    let links = issue["links"].as_array().expect("links array");
+    assert_eq!(links, &vec![Value::String("FEAT_0001".to_string())]);
+    assert!(json["reason"].is_null());
+}
+
+/// A fake sphinx-build whose needs.json has issues but none ready-for-agent.
+#[cfg(unix)]
+const FAKE_SPHINX_NONE_READY: &str = r#"#!/bin/sh
+outdir="$(eval echo \${$#})"
+mkdir -p "$outdir"
+cat > "$outdir/needs.json" <<'JSON'
+{
+  "current_version": "",
+  "project": "t",
+  "versions": { "": { "needs": {
+    "ISSUE_0001": {"id":"ISSUE_0001","type":"issue","title":"a","status":"done"},
+    "ISSUE_0002": {"id":"ISSUE_0002","type":"issue","title":"b","status":"in-progress"}
+  } } }
+}
+JSON
+exit 0
+"#;
+
+#[cfg(unix)]
+#[test]
+fn next_with_no_ready_issue_is_clean_none_ready() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let script = root.join("fake-sphinx.sh");
+    write_script(&script, FAKE_SPHINX_NONE_READY);
+    std::fs::create_dir_all(root.join("spec")).unwrap();
+    let config = root.join("ubproject.toml");
+    let toml = format!(
+        "[[needs.types]]\ndirective = \"issue\"\n\n\
+         [tool.patdhlk-skills]\nbuilder = \"sphinx-build\"\nspec_dir = \"spec\"\n\n\
+         [tool.patdhlk-skills.gate]\nsphinx_command = [\"{}\"]\n\n\
+         [tool.patdhlk-skills.roles]\nissue = \"issue\"\n",
+        script.display()
+    );
+    std::fs::write(&config, toml).unwrap();
+
+    let assert = pds().arg("next").arg("--config").arg(&config).assert();
+    let out = assert.success().code(0).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).expect("stdout is one JSON object");
+    assert_eq!(json["verb"], "next");
+    assert!(json["issue"].is_null());
+    assert_eq!(json["reason"], "none-ready");
+}
+
+#[cfg(unix)]
+#[test]
+fn status_github_backend_is_tool_error_naming_gh() {
+    let (_tmp, config) = backlog_project("issue_backend = \"github\"\n", "issue = \"issue\"\n");
+
+    let assert = pds().arg("status").arg("--config").arg(&config).assert();
+    let out = assert.failure().code(2).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["verb"], "status");
+    assert_eq!(json["error"]["kind"], "tool");
+    let msg = json["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("gh issue list"), "got: {msg}");
+}
+
+#[cfg(unix)]
+#[test]
+fn next_github_backend_is_tool_error_naming_gh_command() {
+    let (_tmp, config) = backlog_project("issue_backend = \"github\"\n", "issue = \"issue\"\n");
+
+    let assert = pds().arg("next").arg("--config").arg(&config).assert();
+    let out = assert.failure().code(2).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["verb"], "next");
+    assert_eq!(json["error"]["kind"], "tool");
+    let msg = json["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("gh issue list --label ready-for-agent"),
+        "got: {msg}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn status_missing_issue_role_is_config_error() {
+    // roles table present but with no `issue` entry.
+    let (_tmp, config) = backlog_project("", "feature = \"feat\"\n");
+
+    let assert = pds().arg("status").arg("--config").arg(&config).assert();
+    let out = assert.failure().code(2).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["verb"], "status");
+    assert_eq!(json["error"]["kind"], "config");
+    let msg = json["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("issue"),
+        "error must name the missing role, got: {msg}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn next_missing_issue_role_is_config_error() {
+    // empty roles table (omitted entirely) => no issue role.
+    let (_tmp, config) = backlog_project("", "");
+
+    let assert = pds().arg("next").arg("--config").arg(&config).assert();
+    let out = assert.failure().code(2).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["verb"], "next");
+    assert_eq!(json["error"]["kind"], "config");
+}
+
+/// A fake sphinx-build that exits non-zero without producing needs.json.
+/// Reuses FAKE_SPHINX_FAIL semantics for the query verbs.
+#[cfg(unix)]
+#[test]
+fn next_build_failure_surfaces_findings_under_next_verb() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let script = root.join("fake-sphinx.sh");
+    write_script(&script, FAKE_SPHINX_FAIL);
+    std::fs::create_dir_all(root.join("spec")).unwrap();
+    let config = root.join("ubproject.toml");
+    let toml = format!(
+        "[[needs.types]]\ndirective = \"issue\"\n\n\
+         [tool.patdhlk-skills]\nbuilder = \"sphinx-build\"\nspec_dir = \"spec\"\n\n\
+         [tool.patdhlk-skills.gate]\nsphinx_command = [\"{}\"]\n\n\
+         [tool.patdhlk-skills.roles]\nissue = \"issue\"\n",
+        script.display()
+    );
+    std::fs::write(&config, toml).unwrap();
+
+    let assert = pds().arg("next").arg("--config").arg(&config).assert();
+    let out = assert.failure().code(1).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).expect("stdout is one JSON object");
+    // Failed build is reported under the invoked verb's envelope.
+    assert_eq!(json["verb"], "next");
+    let findings = json["findings"].as_array().expect("findings array");
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0]["check"], "build");
+}

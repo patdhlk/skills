@@ -132,6 +132,10 @@ pub struct Config {
     pub exempt_statuses: Vec<String>,
     /// Lint rule configuration (`None` when `[tool.patdhlk-skills.lint]` is absent).
     pub lint: Option<LintConfig>,
+    /// Similarity threshold for `pds dedup` (0, 1], from
+    /// `[tool.patdhlk-skills.dedup]`; defaults to
+    /// [`crate::retrieval::DEFAULT_THRESHOLD`] when absent.
+    pub dedup_threshold: f64,
 }
 
 impl Config {
@@ -169,6 +173,7 @@ impl Config {
             roles: raw_roles,
             gate: raw_gate,
             lint: raw_lint,
+            dedup: raw_dedup,
         } = doc.tool.and_then(|t| t.patdhlk_skills).unwrap_or_default();
 
         // spec_dir: tool > project.srcdir > "spec"
@@ -281,6 +286,15 @@ impl Config {
             .map(|raw| validate_lint(raw, &declared_directives))
             .transpose()?;
 
+        // dedup table
+        let dedup_threshold = match raw_dedup.and_then(|d| d.threshold) {
+            Some(t) => {
+                validate_threshold(t, "dedup.threshold")?;
+                t
+            }
+            None => crate::retrieval::DEFAULT_THRESHOLD,
+        };
+
         Ok(Config {
             spec_dir,
             builder,
@@ -291,6 +305,7 @@ impl Config {
             sphinx_command,
             exempt_statuses,
             lint,
+            dedup_threshold,
         })
     }
 }
@@ -338,6 +353,13 @@ struct RawPatdhlkSkills {
     roles: Option<HashMap<String, String>>,
     gate: Option<RawGate>,
     lint: Option<RawLintConfig>,
+    dedup: Option<RawDedup>,
+}
+
+/// Raw `[tool.patdhlk-skills.dedup]` — threshold optional; unknown keys ignored.
+#[derive(Deserialize, Default)]
+struct RawDedup {
+    threshold: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -702,6 +724,19 @@ fn validate_quantifier_rule(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Validate a dedup similarity threshold: finite, > 0, ≤ 1.
+///
+/// `key` names the source in the error message (`"dedup.threshold"` for the
+/// config table, `"--threshold"` for the CLI flag).
+pub(crate) fn validate_threshold(value: f64, key: &str) -> Result<(), Error> {
+    if !value.is_finite() || value <= 0.0 || value > 1.0 {
+        return Err(Error::Config {
+            message: format!("{key} must be a number in (0, 1], got {value}"),
+        });
+    }
+    Ok(())
+}
 
 /// Join `root` and `rel` into an absolute, **lexically** normalised path.
 ///
@@ -1956,5 +1991,99 @@ arch-decision = []
             msg.contains("required_sections") || msg.contains("section list"),
             "error must mention required_sections or section list, got: {msg}"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // dedup table: threshold
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn absent_dedup_table_gives_default_threshold() {
+        let toml = "[project]\nname = \"x\"";
+        let (_tmp, project) = make_project(toml);
+        let cfg = Config::load(&project).unwrap();
+        assert_eq!(cfg.dedup_threshold, crate::retrieval::DEFAULT_THRESHOLD);
+    }
+
+    #[test]
+    fn explicit_dedup_threshold_overrides_default() {
+        let toml = r#"
+[tool.patdhlk-skills.dedup]
+threshold = 0.6
+"#;
+        let (_tmp, project) = make_project(toml);
+        let cfg = Config::load(&project).unwrap();
+        assert_eq!(cfg.dedup_threshold, 0.6);
+    }
+
+    #[test]
+    fn dedup_threshold_zero_is_config_error() {
+        // 0 would gate on any positive-scoring hit — config noise, reject.
+        let toml = r#"
+[tool.patdhlk-skills.dedup]
+threshold = 0.0
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        assert!(err.to_string().contains("threshold"));
+    }
+
+    #[test]
+    fn dedup_threshold_above_one_is_config_error() {
+        let toml = r#"
+[tool.patdhlk-skills.dedup]
+threshold = 1.5
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("threshold") && msg.contains("1.5"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn dedup_threshold_negative_is_config_error() {
+        let toml = r#"
+[tool.patdhlk-skills.dedup]
+threshold = -0.2
+"#;
+        let (_tmp, project) = make_project(toml);
+        let err = Config::load(&project).unwrap_err();
+        assert!(matches!(err, Error::Config { .. }));
+    }
+
+    #[test]
+    fn dedup_threshold_exactly_one_is_legal() {
+        let toml = r#"
+[tool.patdhlk-skills.dedup]
+threshold = 1.0
+"#;
+        let (_tmp, project) = make_project(toml);
+        let cfg = Config::load(&project).unwrap();
+        assert_eq!(cfg.dedup_threshold, 1.0);
+    }
+
+    #[test]
+    fn unknown_dedup_keys_are_ignored() {
+        let toml = r#"
+[tool.patdhlk-skills.dedup]
+threshold = 0.4
+future_engine_key = "embed"
+"#;
+        let (_tmp, project) = make_project(toml);
+        assert!(Config::load(&project).is_ok());
+    }
+
+    #[test]
+    fn dedup_threshold_integer_one_is_legal() {
+        // TOML integer 1 must coerce to 1.0 — users write `threshold = 1`.
+        let toml = "[tool.patdhlk-skills.dedup]\nthreshold = 1\n";
+        let (_tmp, project) = make_project(toml);
+        let cfg = Config::load(&project).unwrap();
+        assert_eq!(cfg.dedup_threshold, 1.0);
     }
 }

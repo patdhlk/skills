@@ -32,6 +32,19 @@ enum Commands {
     Status,
     /// Report the next actionable (ready-for-agent) issue.
     Next,
+    /// Rank needs by relevance to a query; exit 0 even with zero hits (1 = build failure, 2 = config/tool error).
+    Search {
+        /// The query text.
+        query: String,
+    },
+    /// Pre-filing duplicate gate: exit 1 when an issue-typed hit reaches the threshold.
+    Dedup {
+        /// The candidate issue text (title plus body draft).
+        candidate: String,
+        /// Override the configured similarity threshold (a ratio in (0, 1]).
+        #[arg(long, value_name = "RATIO")]
+        threshold: Option<f64>,
+    },
 }
 
 impl Commands {
@@ -42,6 +55,8 @@ impl Commands {
             Commands::Lint => "lint",
             Commands::Status => "status",
             Commands::Next => "next",
+            Commands::Search { .. } => "search",
+            Commands::Dedup { .. } => "dedup",
         }
     }
 }
@@ -74,12 +89,17 @@ fn main() -> ExitCode {
 fn run(cli: &Cli) -> Result<Outcome, Error> {
     let project = resolve_project(cli)?;
     let config = Config::load(&project)?;
-    match cli.command {
+    match &cli.command {
         Commands::Build => pds_core::run_build(&config, &project.root),
         Commands::Check => pds_core::run_check(&config, &project.root),
         Commands::Lint => pds_core::run_lint(&config, &project.root),
         Commands::Status => pds_core::run_status(&config, &project.root),
         Commands::Next => pds_core::run_next(&config, &project.root),
+        Commands::Search { query } => pds_core::run_search(&config, &project.root, query),
+        Commands::Dedup {
+            candidate,
+            threshold,
+        } => pds_core::run_dedup(&config, &project.root, candidate, *threshold),
     }
 }
 

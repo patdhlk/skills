@@ -1910,6 +1910,8 @@ fn fingerprint_github_backend_is_tool_error() {
     let json: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(json["verb"], "fingerprint");
     assert_eq!(json["error"]["kind"], "tool");
+    let msg = json["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("gh issue view"), "got: {msg}");
 }
 
 #[cfg(unix)]
@@ -1939,4 +1941,47 @@ fn fingerprint_build_failure_surfaces_findings_under_fingerprint_verb() {
     let json: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(json["verb"], "fingerprint");
     assert_eq!(json["findings"].as_array().unwrap()[0]["check"], "build");
+}
+
+#[cfg(unix)]
+const FAKE_SPHINX_FP_CONTENT: &str = r#"#!/bin/sh
+outdir="$(eval echo \${$#})"
+mkdir -p "$outdir"
+cat > "$outdir/needs.json" <<'JSON'
+{"current_version":"","project":"t","versions":{"":{"needs":{
+  "ISSUE_0001": {"id":"ISSUE_0001","type":"issue","title":"a real title","status":"ready-for-agent","content":"a body with several words here"}
+}}}}
+JSON
+exit 0
+"#;
+
+#[cfg(unix)]
+#[test]
+fn fingerprint_includes_content_in_the_hash() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let script = root.join("fake-sphinx.sh");
+    write_script(&script, FAKE_SPHINX_FP_CONTENT);
+    std::fs::create_dir_all(root.join("spec")).unwrap();
+    let config = root.join("ubproject.toml");
+    let toml = format!(
+        "[tool.patdhlk-skills]\nbuilder = \"sphinx-build\"\nspec_dir = \"spec\"\n\n\
+         [tool.patdhlk-skills.gate]\nsphinx_command = [\"{}\"]\n",
+        script.display()
+    );
+    std::fs::write(&config, toml).unwrap();
+
+    let assert = pds()
+        .arg("fingerprint")
+        .arg("ISSUE_0001")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.success().get_output().clone();
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+
+    let with_content = pds_core::fingerprint("a real title", "a body with several words here");
+    let title_only = pds_core::fingerprint("a real title", "");
+    assert_eq!(json["fingerprint"], with_content, "verb must hash content");
+    assert_ne!(with_content, title_only, "content must affect the hash");
 }

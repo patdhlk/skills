@@ -316,8 +316,8 @@ pub fn run_verdict_check(config: &Config, project_root: &Path) -> Result<Outcome
 /// the normalization. Read-only; uses the same [`fingerprint`] the verdict
 /// gate uses. Unknown id → [`Error::Config`] naming it (exit 2).
 pub fn run_fingerprint(config: &Config, project_root: &Path, id: &str) -> Result<Outcome, Error> {
-    let gh_hint = "gh issue view <id> --json title,body";
-    let corpus = match load_fresh_corpus(config, project_root, gh_hint)? {
+    let gh_hint = format!("gh issue view {id} --json title,body");
+    let corpus = match load_fresh_corpus(config, project_root, &gh_hint)? {
         CorpusResult::Ready(c) => c,
         CorpusResult::BuildFailed(failed) => return Ok(failed),
     };

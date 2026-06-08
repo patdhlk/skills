@@ -28,13 +28,22 @@ jobs:
         run: uv sync
 
       # The repo's builder is ubc (ubproject.toml -> [tool.patdhlk-skills]).
-      # /usr/local/bin is writable via sudo on ubuntu runners.
+      # useblocks' official action installs + caches ubc and puts it on PATH;
+      # the `make strict` step below then spawns it through `pds`. No license
+      # inputs: this is a public repo, so ubc auto-detects the free open-source
+      # license. (The action is install-only here — it does not itself harden
+      # that license probe; a transient probe failure is cleared by a re-run.)
       - name: Install ubc
-        run: |
-          sudo curl -fsSL \
-            "https://download.useblocks.com/ubc/0.29.3/ubc-linux-$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')-0.29.3" \
-            -o /usr/local/bin/ubc
-          sudo chmod +x /usr/local/bin/ubc
+        uses: useblocks/ubc-action@0422e463faa37e16f39d3d6eb21b15f9e3e060f9 # 0.1
+        with:
+          version: 0.29.3
+          # Free open-source license, supplied via repo secrets so no identity
+          # lives in this file. Until the secrets are set they resolve empty
+          # and the action installs ubc license-less (it then auto-detects the
+          # public repo via an anonymous probe — occasionally rate-limited on
+          # shared runner IPs; re-run if the gate flakes).
+          license-user: ${{ secrets.UBC_LICENSE_USER }}
+          license-key: ${{ secrets.UBC_LICENSE_KEY }}
 
       # `make strict` runs `pds check`; with no `pds` on PATH it cargo-runs the
       # in-tree crate (cli/). The pin lives in cli/rust-toolchain.toml; rustup

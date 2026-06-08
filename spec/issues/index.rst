@@ -751,7 +751,7 @@ The dogfooded backlog (:need:`ADR_0012`): every v1 skill port is an
 
 .. issue:: Wire judgment skills to author verdict directives
    :id: ISSUE_0022
-   :status: ready-for-agent
+   :status: done
    :kind: improvement
    :implements: FEAT_0001
    :links: ISSUE_0014, ADR_0015, ADR_0016

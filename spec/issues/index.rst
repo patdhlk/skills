@@ -824,8 +824,12 @@ The dogfooded backlog (:need:`ADR_0012`): every v1 skill port is an
    - **/triage authors/updates the verdict on entry to an in-scope
      status.** In its apply-transitions step, whenever it routes an
      issue into ``ready-for-agent`` / ``ready-for-human`` /
-     ``in-progress``: (1) apply the ``:status:`` edit first; (2) run
-     ``pds fingerprint <id>`` on the settled corpus; (3) write
+     ``in-progress``: (1) apply the ``:status:`` edit and any
+     title/body tightening this pass makes; (2) run
+     ``pds fingerprint <id>`` *last*, after every title/body edit —
+     only title+body enter the hash (:need:`ADR_0015`), so the
+     ``:status:`` edit's position is irrelevant, but a fingerprint
+     taken before a body edit is born stale; (3) write
      ``VERDICT_<id>`` into ``spec/verdicts/`` (or edit it in place if
      it exists — derived ID means one slot, git history is the audit
      trail, :need:`ADR_0005`) with ``:rubric: triage``, the computed
@@ -867,7 +871,7 @@ The dogfooded backlog (:need:`ADR_0012`): every v1 skill port is an
      ``pds verdict-check`` computes (cross-checked in a test);
      unknown id exits 2; e2e freezes the JSON shape.
    - /triage's SKILL.md documents the author/update sub-step, the
-     fingerprint-after-transition ordering, the four axis
+     fingerprint-last ordering, the four axis
      definitions, the fail-closed rule, and the quick-override
      fail-closed behavior.
    - Dogfood: a triage pass that routes an issue to

@@ -1820,3 +1820,168 @@ fn dedup_build_failure_surfaces_findings_under_dedup_verb() {
     assert_eq!(findings[0]["check"], "build");
     assert!(json.get("verdict").is_none(), "no verdict on build failure");
 }
+
+// ---------------------------------------------------------------------------
+// `pds fingerprint <id>` E2E — verdict fingerprint surface (ISSUE_0022).
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+#[test]
+fn fingerprint_prints_the_need_fingerprint() {
+    let (_tmp, config) = backlog_project("", "");
+
+    let assert = pds()
+        .arg("fingerprint")
+        .arg("ISSUE_0001")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.success().code(0).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).expect("stdout is one JSON object");
+    assert_eq!(json["schema"], 1);
+    assert_eq!(json["verb"], "fingerprint");
+    assert_eq!(json["id"], "ISSUE_0001");
+    let fp = json["fingerprint"].as_str().expect("fingerprint string");
+    assert!(fp.starts_with("sha256:"), "got: {fp}");
+    assert_eq!(fp.len(), "sha256:".len() + 16);
+}
+
+#[cfg(unix)]
+#[test]
+fn fingerprint_matches_pds_core_for_the_same_need() {
+    // The verb must agree with the library fingerprint() — the single source
+    // of truth that verdict-check also uses. FAKE_SPHINX_BACKLOG's ISSUE_0001
+    // has title "first ready" and no content field (content = "").
+    let (_tmp, config) = backlog_project("", "");
+
+    let assert = pds()
+        .arg("fingerprint")
+        .arg("ISSUE_0001")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.success().get_output().clone();
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+
+    let expected = pds_core::fingerprint("first ready", "");
+    assert_eq!(json["fingerprint"], expected);
+}
+
+#[cfg(unix)]
+#[test]
+fn fingerprint_unknown_id_is_config_error_naming_it() {
+    let (_tmp, config) = backlog_project("", "");
+
+    let assert = pds()
+        .arg("fingerprint")
+        .arg("ISSUE_9999")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.failure().code(2).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["verb"], "fingerprint");
+    assert_eq!(json["error"]["kind"], "config");
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("ISSUE_9999"),
+        "error must name the missing id, got: {}",
+        json["error"]["message"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn fingerprint_github_backend_is_tool_error() {
+    let (_tmp, config) = backlog_project("issue_backend = \"github\"\n", "");
+
+    let assert = pds()
+        .arg("fingerprint")
+        .arg("ISSUE_0001")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.failure().code(2).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["verb"], "fingerprint");
+    assert_eq!(json["error"]["kind"], "tool");
+    let msg = json["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("gh issue view"), "got: {msg}");
+}
+
+#[cfg(unix)]
+#[test]
+fn fingerprint_build_failure_surfaces_findings_under_fingerprint_verb() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let script = root.join("fake-sphinx.sh");
+    write_script(&script, FAKE_SPHINX_FAIL);
+    std::fs::create_dir_all(root.join("spec")).unwrap();
+    let config = root.join("ubproject.toml");
+    let toml = format!(
+        "[tool.patdhlk-skills]\nbuilder = \"sphinx-build\"\nspec_dir = \"spec\"\n\n\
+         [tool.patdhlk-skills.gate]\nsphinx_command = [\"{}\"]\n",
+        script.display()
+    );
+    std::fs::write(&config, toml).unwrap();
+
+    let assert = pds()
+        .arg("fingerprint")
+        .arg("ISSUE_0001")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.failure().code(1).get_output().clone();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["verb"], "fingerprint");
+    assert_eq!(json["findings"].as_array().unwrap()[0]["check"], "build");
+}
+
+#[cfg(unix)]
+const FAKE_SPHINX_FP_CONTENT: &str = r#"#!/bin/sh
+outdir="$(eval echo \${$#})"
+mkdir -p "$outdir"
+cat > "$outdir/needs.json" <<'JSON'
+{"current_version":"","project":"t","versions":{"":{"needs":{
+  "ISSUE_0001": {"id":"ISSUE_0001","type":"issue","title":"a real title","status":"ready-for-agent","content":"a body with several words here"}
+}}}}
+JSON
+exit 0
+"#;
+
+#[cfg(unix)]
+#[test]
+fn fingerprint_includes_content_in_the_hash() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let script = root.join("fake-sphinx.sh");
+    write_script(&script, FAKE_SPHINX_FP_CONTENT);
+    std::fs::create_dir_all(root.join("spec")).unwrap();
+    let config = root.join("ubproject.toml");
+    let toml = format!(
+        "[tool.patdhlk-skills]\nbuilder = \"sphinx-build\"\nspec_dir = \"spec\"\n\n\
+         [tool.patdhlk-skills.gate]\nsphinx_command = [\"{}\"]\n",
+        script.display()
+    );
+    std::fs::write(&config, toml).unwrap();
+
+    let assert = pds()
+        .arg("fingerprint")
+        .arg("ISSUE_0001")
+        .arg("--config")
+        .arg(&config)
+        .assert();
+    let out = assert.success().get_output().clone();
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+
+    let with_content = pds_core::fingerprint("a real title", "a body with several words here");
+    let title_only = pds_core::fingerprint("a real title", "");
+    assert_eq!(json["fingerprint"], with_content, "verb must hash content");
+    assert_ne!(with_content, title_only, "content must affect the hash");
+}

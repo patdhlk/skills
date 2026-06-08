@@ -25,7 +25,9 @@ repo dogfoods its own system: backlog, decisions, and glossary live in
   all need types (always exit 0); `pds dedup "<candidate>"` = the same
   ranking as a pre-filing gate — exit 1 when an issue-typed hit reaches
   the threshold (ADR_0021; `[tool.patdhlk-skills.dedup]` /
-  `--threshold`). Ad-hoc reads stay `jq`.
+  `--threshold`); `pds fingerprint "<id>"` = the ADR_0015 content
+  fingerprint of one need (for authoring verdicts). Ad-hoc reads stay
+  `jq`.
 - New IDs: dense max+1 per prefix, from a fresh needs.json (ADR_0008).
 - **Every spec mutation must end with the strict gate: `make strict`**
   (= `pds check`, ADR_0017 — the per-builder gate that emits a fresh

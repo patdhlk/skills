@@ -47,6 +47,11 @@ enum Commands {
     },
     /// Check verdict coverage: missing / failing / stale / malformed (exit 1 on any).
     VerdictCheck,
+    /// Print the verdict fingerprint of one need (for authoring verdicts).
+    Fingerprint {
+        /// The need id to fingerprint.
+        id: String,
+    },
 }
 
 impl Commands {
@@ -60,6 +65,7 @@ impl Commands {
             Commands::Search { .. } => "search",
             Commands::Dedup { .. } => "dedup",
             Commands::VerdictCheck => "verdict-check",
+            Commands::Fingerprint { .. } => "fingerprint",
         }
     }
 }
@@ -104,6 +110,7 @@ fn run(cli: &Cli) -> Result<Outcome, Error> {
             threshold,
         } => pds_core::run_dedup(&config, &project.root, candidate, *threshold),
         Commands::VerdictCheck => pds_core::run_verdict_check(&config, &project.root),
+        Commands::Fingerprint { id } => pds_core::run_fingerprint(&config, &project.root, id),
     }
 }
 
